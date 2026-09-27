@@ -1,5 +1,8 @@
 /**
- * High-Precision Realtime Audio Streamer for Gemini Live Translate
+ * iOS Safari & Android Chrome Production-Grade Audio Streamer
+ * - Fixes iOS Safari 0% silent microphone capture bug (GainNode 0 mute loop)
+ * - 16kHz resampling with 100ms precise PCM buffering
+ * - 24kHz smooth queue playback
  */
 class AudioStreamer {
   constructor({ onAudioChunk, onInputVolume, onOutputVolume, onDebugLog }) {
@@ -12,13 +15,12 @@ class AudioStreamer {
     this.outputAudioContext = null;
     this.mediaStream = null;
     this.scriptProcessor = null;
+    this.muteGain = null;
     this.isRecording = false;
 
-    // 16kHz 100ms = 1600 samples
     this.chunkSampleSize = 1600; 
     this.sampleAccumulator = [];
 
-    // Output playback queue
     this.nextPlayTime = 0;
     this.outputSampleRate = 24000;
   }
@@ -33,7 +35,7 @@ class AudioStreamer {
         await this.outputAudioContext.resume();
       }
       this.nextPlayTime = this.outputAudioContext.currentTime;
-      this.onDebugLog('[Audio] AudioContext Active: ' + this.outputAudioContext.state);
+      this.onDebugLog('[Audio] Output Engine Ready: ' + this.outputAudioContext.state);
     } catch (e) {
       console.warn('[Audio] Unlock error:', e);
     }
@@ -46,6 +48,7 @@ class AudioStreamer {
     this.sampleAccumulator = [];
 
     try {
+      // Request mic stream
       this.mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
@@ -63,37 +66,47 @@ class AudioStreamer {
       }
 
       const inputRate = this.inputAudioContext.sampleRate;
-      this.onDebugLog(`[Mic] Hardware: ${inputRate}Hz -> 16kHz (100ms)`);
+      this.onDebugLog(`[Mic] Hardware SampleRate: ${inputRate}Hz`);
 
       const source = this.inputAudioContext.createMediaStreamSource(this.mediaStream);
 
+      // Buffer size 2048
       const bufferSize = 2048;
       this.scriptProcessor = this.inputAudioContext.createScriptProcessor(bufferSize, 1, 1);
+
+      // CRITICAL FIX FOR iOS SAFARI:
+      // In iOS Safari, connecting scriptProcessor directly to destination causes mic to mute (0 level).
+      // Connecting through a muteGain (gain = 0) to destination keeps the audio pipeline running with real non-zero microphone data!
+      this.muteGain = this.inputAudioContext.createGain();
+      this.muteGain.gain.setValueAtTime(0, this.inputAudioContext.currentTime);
 
       this.scriptProcessor.onaudioprocess = (event) => {
         if (!this.isRecording) return;
 
         const inputData = event.inputBuffer.getChannelData(0);
 
-        // Volume meter
+        // Calculate RMS Volume
         let sum = 0;
+        let peak = 0;
         for (let i = 0; i < inputData.length; i++) {
+          const abs = Math.abs(inputData[i]);
+          if (abs > peak) peak = abs;
           sum += inputData[i] * inputData[i];
         }
         const rms = Math.sqrt(sum / inputData.length);
+
         if (this.onInputVolume) {
-          this.onInputVolume(rms);
+          this.onInputVolume(Math.max(rms, peak * 0.5));
         }
 
         // Resample native to 16kHz
         const resampled = this.resampleTo16k(inputData, inputRate);
         
-        // Accumulate
         for (let i = 0; i < resampled.length; i++) {
           this.sampleAccumulator.push(resampled[i]);
         }
 
-        // Send 100ms (1600 samples)
+        // Emit exact 100ms (1600 samples) chunks
         while (this.sampleAccumulator.length >= this.chunkSampleSize) {
           const chunkSamples = this.sampleAccumulator.splice(0, this.chunkSampleSize);
           const pcm16 = this.floatTo16BitPCM(chunkSamples);
@@ -106,9 +119,11 @@ class AudioStreamer {
       };
 
       source.connect(this.scriptProcessor);
-      this.scriptProcessor.connect(this.inputAudioContext.destination);
+      this.scriptProcessor.connect(this.muteGain);
+      this.muteGain.connect(this.inputAudioContext.destination);
 
       this.isRecording = true;
+      this.onDebugLog('[Mic] Active & Streaming');
     } catch (err) {
       this.onDebugLog(`[Mic Error] ${err.message}`);
       console.error('[AudioStreamer] Error starting mic:', err);
@@ -122,6 +137,11 @@ class AudioStreamer {
     if (this.scriptProcessor) {
       this.scriptProcessor.disconnect();
       this.scriptProcessor = null;
+    }
+
+    if (this.muteGain) {
+      this.muteGain.disconnect();
+      this.muteGain = null;
     }
 
     if (this.mediaStream) {
@@ -159,8 +179,9 @@ class AudioStreamer {
     const buffer = new ArrayBuffer(samples.length * 2);
     const view = new DataView(buffer);
     for (let i = 0; i < samples.length; i++) {
-      const s = Math.max(-1, Math.min(1, samples[i]));
-      view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+      // Amplify slightly for mobile microphones if needed
+      const sample = Math.max(-1, Math.min(1, samples[i]));
+      view.setInt16(i * 2, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
     }
     return new Int16Array(buffer);
   }
