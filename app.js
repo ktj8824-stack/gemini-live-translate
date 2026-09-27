@@ -1,6 +1,6 @@
 /**
  * Gemini Live Translate Frontend Application
- * Fully verified with Gemini Live Translate API WebSocket Protocol
+ * Handles both Text, Blob & ArrayBuffer WebSocket data safely
  */
 
 const SUPPORTED_LANGUAGES = [
@@ -326,12 +326,21 @@ class LiveTranslatorApp {
         }
       };
 
-      this.ws.onmessage = (event) => {
+      // Handle String, Blob, and ArrayBuffer data from WebSocket
+      this.ws.onmessage = async (event) => {
         try {
-          const raw = JSON.parse(event.data);
+          let text = '';
+          if (typeof event.data === 'string') {
+            text = event.data;
+          } else if (event.data instanceof Blob) {
+            text = await event.data.text();
+          } else if (event.data instanceof ArrayBuffer) {
+            text = new TextDecoder().decode(event.data);
+          }
+          const raw = JSON.parse(text);
           this.handleServerMessage(raw);
         } catch (e) {
-          console.error('Parse error:', e);
+          console.error('Parse error:', e, event.data);
         }
       };
 
