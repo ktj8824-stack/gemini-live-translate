@@ -1,9 +1,7 @@
 /**
  * Gemini Live Translate Frontend Application
- * Supports both Backend Relay & Direct Client WebSocket for GitHub Pages
+ * Fully optimized for Mobile Safari / Mobile Chrome / Desktop
  */
-
-const DEFAULT_API_KEY = "";
 
 const SUPPORTED_LANGUAGES = [
   { code: 'ko', name: '한국어 (Korean)', flag: '🇰🇷' },
@@ -35,7 +33,7 @@ const SUPPORTED_LANGUAGES = [
   { code: 'fi', name: '핀란드어 (Finnish)', flag: '🇫🇮' },
   { code: 'el', name: '그리스어 (Greek)', flag: '🇬🇷' },
   { code: 'he', name: '히브리어 (Hebrew)', flag: '🇮🇱' },
-  { code: 'hu', name: '헝가리어 (Hungarian)', flag: '헝가리' },
+  { code: 'hu', name: '헝가리어 (Hungarian)', flag: '🇭🇺' },
   { code: 'no', name: '노르웨이어 (Norwegian)', flag: '🇳🇴' },
   { code: 'ro', name: '루마니아어 (Romanian)', flag: '🇷🇴' },
   { code: 'sk', name: '슬로바키아어 (Slovak)', flag: '🇸🇰' }
@@ -45,36 +43,40 @@ class LiveTranslatorApp {
   constructor() {
     this.ws = null;
     this.isStreaming = false;
-    this.currentMode = 'split'; // 'split' | 'solo'
-    this.isDirectGemini = false; // true when using GitHub Pages without backend
+    this.currentMode = 'split';
+    this.isDirectGemini = true;
     
-    // User & Partner Target Language
     this.userLang = 'ko';
     this.partnerLang = 'en';
 
-    // Settings & API Key
-    this.apiKey = localStorage.getItem('gemini_api_key') || DEFAULT_API_KEY;
+    this.chunksSent = 0;
+    this.chunksReceived = 0;
+
+    this.apiKey = localStorage.getItem('gemini_api_key') || "";
     this.settings = {
-      echoTargetLanguage: false,
+      echoTargetLanguage: true,
       audioOutputEnabled: true,
       echoCancellation: true
     };
 
-    // Conversation History
     this.history = [];
     this.currentInputText = '';
     this.currentOutputText = '';
 
     this.audioStreamer = new AudioStreamer({
       onAudioChunk: (chunk) => this.sendAudioChunk(chunk),
-      onInputVolume: (vol) => this.drawWaveform('user-wave', vol, '#00e5ff'),
-      onOutputVolume: (vol) => this.drawWaveform('partner-wave', vol, '#8b5cf6')
+      onInputVolume: (vol) => {
+        this.drawWaveform('user-wave', vol, '#00e5ff');
+        this.updateVolumeBar(vol);
+      },
+      onOutputVolume: (vol) => this.drawWaveform('partner-wave', vol, '#8b5cf6'),
+      onDebugLog: (msg) => this.addDebugLog(msg)
     });
 
     this.initElements();
     this.populateLanguageOptions();
     this.bindEvents();
-    this.checkEnvironment();
+    this.checkApiKey();
   }
 
   initElements() {
@@ -120,6 +122,9 @@ class LiveTranslatorApp {
     }
 
     this.settingEchoToggle = document.getElementById('setting-echo-toggle');
+    if (this.settingEchoToggle) {
+      this.settingEchoToggle.checked = this.settings.echoTargetLanguage;
+    }
     this.settingAudioOut = document.getElementById('setting-audio-out');
     this.settingEchoCancellation = document.getElementById('setting-echo-cancellation');
   }
@@ -186,10 +191,9 @@ class LiveTranslatorApp {
     this.btnCloseSettings.addEventListener('click', () => this.settingsModal.classList.add('hidden'));
 
     if (this.inputApiKey) {
-      this.inputApiKey.addEventListener('change', (e) => {
+      this.inputApiKey.addEventListener('input', (e) => {
         this.apiKey = e.target.value.trim();
         localStorage.setItem('gemini_api_key', this.apiKey);
-        alert('API 키가 저장되었습니다.');
       });
     }
 
@@ -207,19 +211,14 @@ class LiveTranslatorApp {
     });
   }
 
-  async checkEnvironment() {
-    try {
-      const res = await fetch('/api/status');
-      if (res.ok) {
-        this.isDirectGemini = false;
-        console.log('[Env] Connected via backend relay');
-      } else {
-        this.isDirectGemini = true;
-      }
-    } catch (e) {
-      // Running on GitHub Pages or static host
-      this.isDirectGemini = true;
-      console.log('[Env] Static hosting detected, using direct Gemini WebSocket');
+  checkApiKey() {
+    if (!this.apiKey) {
+      setTimeout(() => {
+        this.settingsModal.classList.remove('hidden');
+        this.setStatusPill('API 키 입력 필요', '#f59e0b');
+      }, 500);
+    } else {
+      this.setStatusPill('준비 완료 (마이크 터치)', '#10b981');
     }
   }
 
@@ -255,8 +254,9 @@ class LiveTranslatorApp {
 
   onLanguageChange() {
     if (this.isStreaming) {
+      this.addDebugLog(`[Lang] Switching target language to: ${this.partnerLang}`);
       this.stopStreaming();
-      setTimeout(() => this.startStreaming(), 200);
+      setTimeout(() => this.startStreaming(), 250);
     }
   }
 
@@ -270,60 +270,46 @@ class LiveTranslatorApp {
 
   async startStreaming() {
     try {
-      const apiKey = this.apiKey || DEFAULT_API_KEY;
-      
-      if (!apiKey && (this.isDirectGemini || location.hostname.includes('github.io'))) {
-        alert('Gemini API 키를 먼저 입력해 주세요. (우측 상단 ⚙️ 설정에서 입력 가능합니다)');
+      this.apiKey = (this.inputApiKey?.value || this.apiKey || localStorage.getItem('gemini_api_key') || "").trim();
+
+      if (!this.apiKey) {
+        alert('Gemini API 키가 입력되지 않았습니다. 설정창에서 API 키를 입력해 주세요.');
         this.settingsModal.classList.remove('hidden');
         if (this.inputApiKey) this.inputApiKey.focus();
         return;
       }
 
+      this.chunksSent = 0;
+      this.chunksReceived = 0;
       this.updateStatusUI(true);
-      this.setStatusPill('연결 중...', 'orange');
-      
-      let wsUrl = '';
-      if (this.isDirectGemini || location.hostname.includes('github.io') || location.hostname.includes('vercel.app')) {
-        wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${apiKey}`;
-      } else {
-        const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        wsUrl = `${protocol}//${location.host}/ws/translate`;
-      }
+      this.setStatusPill('Gemini 연결 중...', 'orange');
+      this.addDebugLog(`[Gemini] Connecting to Live Translate (${this.partnerLang})...`);
 
-      console.log('[App] Connecting WebSocket to:', wsUrl.replace(/key=([^&]+)/, 'key=HIDDEN'));
+      const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${this.apiKey}`;
+
       this.ws = new WebSocket(wsUrl);
 
       this.ws.onopen = async () => {
-        console.log('[WebSocket] Connected');
+        this.addDebugLog('[WebSocket] Connected! Sending translation setup...');
         this.setStatusPill('세션 구성 중...', 'cyan');
 
-        if (this.isDirectGemini || location.hostname.includes('github.io')) {
-          // Direct setup message
-          const setupMessage = {
-            setup: {
-              model: 'models/gemini-3.5-live-translate-preview',
-              generationConfig: {
-                responseModalities: ['AUDIO'],
-                inputAudioTranscription: {},
-                outputAudioTranscription: {},
-                translationConfig: {
-                  targetLanguageCode: this.partnerLang,
-                  echoTargetLanguage: this.settings.echoTargetLanguage
-                }
+        const setupMessage = {
+          setup: {
+            model: 'models/gemini-3.5-live-translate-preview',
+            generationConfig: {
+              responseModalities: ['AUDIO'],
+              inputAudioTranscription: {},
+              outputAudioTranscription: {},
+              translationConfig: {
+                targetLanguageCode: this.partnerLang,
+                echoTargetLanguage: this.settings.echoTargetLanguage
               }
             }
-          };
-          this.ws.send(JSON.stringify(setupMessage));
-        } else {
-          // Backend relay start
-          this.ws.send(JSON.stringify({
-            type: 'start',
-            config: {
-              targetLanguageCode: this.partnerLang,
-              echoTargetLanguage: this.settings.echoTargetLanguage
-            }
-          }));
-        }
+          }
+        };
+
+        this.ws.send(JSON.stringify(setupMessage));
+        this.addDebugLog(`[Setup Sent] TargetLang: ${this.partnerLang}, Echo: ${this.settings.echoTargetLanguage}`);
 
         // Start mic recording
         try {
@@ -331,9 +317,10 @@ class LiveTranslatorApp {
             echoCancellation: this.settings.echoCancellation
           });
           this.isStreaming = true;
-          this.setStatusPill('통역 준비 완료 (듣는 중)', '#10b981');
+          this.setStatusPill('통역 중 (듣는 중)', '#10b981');
+          this.streamStatusLabel.textContent = '음성을 듣고 실시간 통역 중입니다...';
         } catch (micErr) {
-          console.error('[Mic Error]', micErr);
+          this.addDebugLog(`[Mic Error] ${micErr.message}`);
           alert('마이크 접근 권한이 필요합니다. 브라우저 설정에서 마이크를 허용해 주세요: ' + micErr.message);
           this.stopStreaming();
         }
@@ -342,34 +329,26 @@ class LiveTranslatorApp {
       this.ws.onmessage = (event) => {
         try {
           const raw = JSON.parse(event.data);
-          
-          // If direct response from Gemini
-          if (raw.serverContent) {
-            this.handleServerMessage({ payload: raw });
-          } else if (raw.type === 'gemini_response') {
-            this.handleServerMessage(raw);
-          } else if (raw.type === 'log') {
-            this.streamStatusLabel.textContent = msg.message;
-          }
+          this.handleServerMessage(raw);
         } catch (e) {
           console.error('Parse error:', e);
         }
       };
 
       this.ws.onclose = (ev) => {
-        console.log('[WebSocket] Closed:', ev);
-        this.setStatusPill('연결 대기', '#94a3b8');
+        this.addDebugLog(`[WebSocket Closed] Code: ${ev.code}, Reason: ${ev.reason || 'Normal'}`);
+        this.setStatusPill('대기 중', '#94a3b8');
         this.stopStreaming();
       };
 
       this.ws.onerror = (err) => {
-        console.error('[WebSocket] Error:', err);
-        this.setStatusPill('통신 오류', '#f43f5e');
+        this.addDebugLog(`[WebSocket Error] Connection failed. Check API Key.`);
+        this.setStatusPill('통신 오류 (API 키 확인)', '#f43f5e');
         this.stopStreaming();
       };
 
     } catch (err) {
-      console.error('[App] Failed to start stream:', err);
+      this.addDebugLog(`[Start Error] ${err.message}`);
       alert('스트리밍을 시작할 수 없습니다: ' + err.message);
       this.stopStreaming();
     }
@@ -381,7 +360,6 @@ class LiveTranslatorApp {
 
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       try {
-        this.ws.send(JSON.stringify({ type: 'stop' }));
         this.ws.close();
       } catch (e) {}
     }
@@ -393,49 +371,52 @@ class LiveTranslatorApp {
 
   sendAudioChunk(base64Data) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      if (this.isDirectGemini || location.hostname.includes('github.io')) {
-        const payload = {
-          realtimeInput: {
-            mediaChunks: [
-              {
-                mimeType: 'audio/pcm;rate=16000',
-                data: base64Data
-              }
-            ]
-          }
-        };
-        this.ws.send(JSON.stringify(payload));
-      } else {
-        this.ws.send(JSON.stringify({
-          type: 'audio_chunk',
-          data: base64Data
-        }));
+      this.chunksSent++;
+      const payload = {
+        realtimeInput: {
+          mediaChunks: [
+            {
+              mimeType: 'audio/pcm;rate=16000',
+              data: base64Data
+            }
+          ]
+        }
+      };
+      this.ws.send(JSON.stringify(payload));
+      if (this.chunksSent % 15 === 0) {
+        this.updateStatsBar();
       }
     }
   }
 
-  handleServerMessage(msg) {
-    const serverContent = msg.payload?.serverContent || msg.serverContent;
-    if (!serverContent) return;
+  handleServerMessage(data) {
+    const serverContent = data.serverContent || data.payload?.serverContent;
+    if (!serverContent) {
+      if (data.setupComplete) {
+        this.addDebugLog('[Gemini] Setup Complete!');
+      }
+      return;
+    }
 
-    // 1. Input Transcript
     if (serverContent.inputTranscription && serverContent.inputTranscription.text) {
       const text = serverContent.inputTranscription.text;
       this.currentInputText += text;
+      this.addDebugLog(`[STT In] ${text}`);
       this.renderLiveTranscript();
     }
 
-    // 2. Output Transcript
     if (serverContent.outputTranscription && serverContent.outputTranscription.text) {
       const text = serverContent.outputTranscription.text;
       this.currentOutputText += text;
+      this.addDebugLog(`[STT Out] ${text}`);
       this.renderLiveTranscript();
     }
 
-    // 3. Audio Playback
     if (serverContent.modelTurn && serverContent.modelTurn.parts) {
       for (const part of serverContent.modelTurn.parts) {
         if (part.inlineData && part.inlineData.data) {
+          this.chunksReceived++;
+          this.updateStatsBar();
           if (this.settings.audioOutputEnabled) {
             this.audioStreamer.playChunk(part.inlineData.data);
           }
@@ -443,7 +424,6 @@ class LiveTranslatorApp {
       }
     }
 
-    // Turn complete
     if (serverContent.turnComplete) {
       this.flushCurrentTurnToHistory();
     }
@@ -563,13 +543,34 @@ class LiveTranslatorApp {
     }
   }
 
+  updateVolumeBar(volume) {
+    if (this.isStreaming) {
+      const pct = Math.min(100, Math.round(volume * 400));
+      this.streamStatusLabel.textContent = `🎙️ 마이크 감지 중 (레벨: ${pct}%) | 전송: ${this.chunksSent} / 수신: ${this.chunksReceived}`;
+    }
+  }
+
+  updateStatsBar() {
+    if (this.isStreaming) {
+      this.streamStatusLabel.textContent = `🎙️ 실시간 통역 중... [전송: ${this.chunksSent} 청크 | 수신: ${this.chunksReceived} 오디오]`;
+    }
+  }
+
+  addDebugLog(msg) {
+    console.log('[Live]', msg);
+    const logEl = document.getElementById('debug-log-text');
+    if (logEl) {
+      logEl.textContent = msg;
+    }
+  }
+
   updateStatusUI(streaming) {
     if (streaming) {
       this.btnToggleStream.className = 'mic-button streaming';
       this.btnSoloMic.className = 'mic-button-floating streaming';
       this.micIcon.classList.add('hidden');
       this.stopIcon.classList.remove('hidden');
-      this.streamStatusLabel.textContent = '실시간 동시통역 중... (터치하여 중지)';
+      this.streamStatusLabel.textContent = '실시간 통역 중... (터치하여 중지)';
       this.soloMicText.textContent = '통역 중지';
     } else {
       this.btnToggleStream.className = 'mic-button idle';

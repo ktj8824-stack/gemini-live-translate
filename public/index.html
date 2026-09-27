@@ -154,8 +154,9 @@
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
             <span id="solo-mic-text">통역 시작</span>
           </button>
-        </div>
-      </div>
+    <!-- Bottom Floating Debug Ticker -->
+    <div class="debug-ticker" style="position: fixed; bottom: 8px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.75); backdrop-filter: blur(10px); padding: 4px 12px; border-radius: 20px; font-size: 0.72rem; color: var(--accent-cyan); border: 1px solid var(--border-color); z-index: 80; pointer-events: none; max-width: 90vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+      <span id="debug-log-text">시스템 준비 완료</span>
     </div>
   </main>
 
