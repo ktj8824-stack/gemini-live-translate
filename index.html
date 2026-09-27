@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Gemini Live Translate - 실시간 동시통역</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@300;400;500;600;700;800&family=Outfit:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="mode-split">
+  <!-- Top Global Header -->
+  <header class="app-header">
+    <div class="brand">
+      <div class="brand-logo">
+        <span class="sparkle-icon">✨</span>
+      </div>
+      <div class="brand-text">
+        <h1>Gemini <span>Live Translate</span></h1>
+        <div id="connection-status-pill" class="model-badge">대기 중...</div>
+      </div>
+    </div>
+
+    <div class="header-controls">
+      <!-- Mode Toggle -->
+      <div class="segmented-control">
+        <button id="btn-mode-split" class="segment active" title="테이블 대면 분할 화면 (상대방 180도 반전)">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M4 7l8-5 8 5M4 17l8 5 8-5"/></svg>
+          <span>대면 모드</span>
+        </button>
+        <button id="btn-mode-solo" class="segment" title="이어폰 / 1인용 타임라인 피드">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>
+          <span>이어폰 모드</span>
+        </button>
+      </div>
+
+      <button id="btn-history-toggle" class="icon-btn" title="대화 기록 보기">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      </button>
+      
+      <button id="btn-settings-toggle" class="icon-btn" title="설정">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <main class="main-container">
+    <!-- View 1: 대면 분할 뷰 (Face-to-Face Split Screen) -->
+    <div id="split-view" class="view-panel active">
+      
+      <!-- Top Zone (상대방 영역: 180도 회전 표시) -->
+      <section class="partner-zone inverted-zone">
+        <div class="zone-header">
+          <div class="zone-tag">
+            <span class="pulse-dot"></span>
+            <span>상대방 화면 (Guest View)</span>
+          </div>
+          <div class="lang-selector-wrap">
+            <label for="partner-lang-select">대상 언어:</label>
+            <select id="partner-lang-select" class="lang-select">
+            </select>
+          </div>
+        </div>
+
+        <div class="transcript-display partner-transcript">
+          <div class="subtitle-wrapper">
+            <p id="partner-output-text" class="live-text highlight">말씀하시면 실시간으로 번역됩니다.</p>
+            <p id="partner-input-text" class="live-original-text">You speak, and it translates in real time.</p>
+          </div>
+        </div>
+
+        <div class="audio-wave-wrap">
+          <canvas id="partner-wave" class="audio-wave" width="400" height="40"></canvas>
+        </div>
+      </section>
+
+      <!-- Center Divider & Control Bar -->
+      <div class="center-divider">
+        <div class="quick-swap-wrap">
+          <button id="btn-swap-languages" class="icon-btn swap-btn" title="언어 방향 전환">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M7 16V4m0 0L3 8m4-4l4 4M17 8v12m0 0l4-4m-4 4l-4-4"/></svg>
+          </button>
+        </div>
+
+        <div class="main-action-wrap">
+          <button id="btn-toggle-stream" class="mic-button idle">
+            <div class="mic-inner">
+              <svg id="mic-icon" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+              <svg id="stop-icon" class="hidden" width="26" height="26" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+            </div>
+            <div class="pulse-ring"></div>
+            <div class="pulse-ring-2"></div>
+          </button>
+          <span id="stream-status-label" class="status-label">터치하여 동시통역 시작</span>
+        </div>
+      </div>
+
+      <!-- Bottom Zone (내 영역: 정방향 표시) -->
+      <section class="user-zone">
+        <div class="zone-header">
+          <div class="zone-tag">
+            <span class="user-badge">나 (My View)</span>
+          </div>
+          <div class="lang-selector-wrap">
+            <label for="user-lang-select">내 언어:</label>
+            <select id="user-lang-select" class="lang-select">
+            </select>
+          </div>
+        </div>
+
+        <div class="transcript-display user-transcript">
+          <div class="subtitle-wrapper">
+            <p id="user-input-text" class="live-original-text">말씀을 시작하세요...</p>
+            <p id="user-output-text" class="live-text highlight">번역 결과가 여기에 표시됩니다.</p>
+          </div>
+        </div>
+
+        <div class="audio-wave-wrap">
+          <canvas id="user-wave" class="audio-wave" width="400" height="40"></canvas>
+        </div>
+      </section>
+
+    </div>
+
+    <!-- View 2: 이어폰/1인 피드 모드 (Solo Feed Mode) -->
+    <div id="solo-view" class="view-panel">
+      <div class="solo-container">
+        <div class="solo-top-bar">
+          <div class="lang-pill-selector">
+            <select id="solo-user-lang" class="lang-select-compact"></select>
+            <button id="btn-solo-swap" class="icon-btn-compact">⇄</button>
+            <select id="solo-target-lang" class="lang-select-compact"></select>
+          </div>
+          <div class="earphone-status">
+            <span class="earphone-icon">🎧</span>
+            <span>초저지연 오디오 스트리밍 준비 완료</span>
+          </div>
+        </div>
+
+        <!-- Feed Stream -->
+        <div id="conversation-feed" class="conversation-feed">
+          <div class="feed-placeholder">
+            <div class="placeholder-icon">🎙️</div>
+            <h3>실시간 동시통역 준비 완료</h3>
+            <p>마이크 버튼을 누르고 말씀하시면 귓속으로 번역된 음성이 전달되고 실시간 텍스트 피드가 생성됩니다.</p>
+          </div>
+        </div>
+
+        <!-- Bottom Float Mic -->
+        <div class="solo-controls">
+          <button id="btn-solo-mic" class="mic-button-floating idle">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+            <span id="solo-mic-text">통역 시작</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Sidebar: 대화 기록 (History Drawer) -->
+  <aside id="history-drawer" class="drawer">
+    <div class="drawer-header">
+      <h2>대화 히스토리 (Transcript Logs)</h2>
+      <button id="btn-close-history" class="icon-btn">✕</button>
+    </div>
+    <div id="history-list" class="history-list">
+      <p class="empty-history">아직 기록된 대화가 없습니다.</p>
+    </div>
+    <div class="drawer-footer">
+      <button id="btn-copy-history" class="secondary-btn">전체 복사</button>
+      <button id="btn-download-history" class="primary-btn">텍스트 저장(.txt)</button>
+    </div>
+  </aside>
+
+  <!-- Modal: 설정 (Settings Modal) -->
+  <div id="settings-modal" class="modal-overlay hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>환경 설정 (Settings)</h2>
+        <button id="btn-close-settings" class="icon-btn">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="setting-item" style="flex-direction: column; align-items: flex-start; gap: 0.5rem;">
+          <div class="setting-label">
+            <strong>Gemini API Key 설정</strong>
+            <p>직접 브라우저에서 사용할 API 키를 입력하거나 수정할 수 있습니다.</p>
+          </div>
+          <input type="password" id="input-api-key" placeholder="AIzaSy... 또는 API 키 입력" style="width: 100%; padding: 0.6rem; border-radius: 8px; background: rgba(0,0,0,0.4); color:#fff; border: 1px solid var(--border-color);">
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
+            <strong>Echo Target Language</strong>
+            <p>입력 언어가 이미 대상 언어일 때 음성을 반복(에코)할지 여부</p>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="setting-echo-toggle">
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
+            <strong>음성 자동 출력 (Audio Playback)</strong>
+            <p>Gemini가 번역한 24kHz 음성을 스피커/이어폰으로 실시간 재생</p>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="setting-audio-out" checked>
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
+            <strong>노이즈 캔슬링 / 에코 제거</strong>
+            <p>마이크 입력 시 브라우저 하드웨어 에코 및 잡음 제거</p>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="setting-echo-cancellation" checked>
+            <span class="slider"></span>
+          </label>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Audio Streamer & App Scripts -->
+  <script src="audio-streamer.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
