@@ -17,8 +17,6 @@ const wss = new WebSocketServer({ server, path: '/ws/translate' });
 const PORT = process.env.PORT || 3000;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
-console.log('[Init] GEMINI_API_KEY present:', Boolean(GEMINI_API_KEY), 'Length:', GEMINI_API_KEY ? GEMINI_API_KEY.length : 0);
-
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json());
 
@@ -33,16 +31,14 @@ app.get('/api/status', (req, res) => {
 const GEMINI_WS_URL = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${GEMINI_API_KEY}`;
 
 wss.on('connection', (clientWs, req) => {
-  const clientIp = req.socket.remoteAddress;
-  console.log(`[Client] Connected from ${clientIp}`);
-
+  console.log(`[Client] Connected`);
   let geminiWs = null;
   let isGeminiReady = false;
-  let audioChunkCount = 0;
+  let chunkCount = 0;
 
-  const sendToClient = (type, data) => {
+  const sendToClient = (data) => {
     if (clientWs.readyState === WebSocket.OPEN) {
-      clientWs.send(JSON.stringify({ type, ...data }));
+      clientWs.send(JSON.stringify(data));
     }
   };
 
@@ -52,28 +48,24 @@ wss.on('connection', (clientWs, req) => {
     }
 
     const targetLang = config?.targetLanguageCode || 'en';
-    const echoTarget = config?.echoTargetLanguage ?? false;
+    const echoTarget = config?.echoTargetLanguage ?? true;
 
-    console.log(`[Gemini] Connecting... Target: ${targetLang}, Echo: ${echoTarget}`);
-    sendToClient('log', { message: `[1/3] Gemini Live Translate (${targetLang}) 서버에 연결 중...` });
+    console.log(`[Gemini] Connecting... TargetLang: ${targetLang}, Echo: ${echoTarget}`);
 
     try {
       geminiWs = new WebSocket(GEMINI_WS_URL);
 
       geminiWs.on('open', () => {
-        console.log('[Gemini] WebSocket Opened. Sending setup message...');
-        sendToClient('log', { message: `[2/3] 세션 구성(Setup) 전송 중...` });
+        console.log('[Gemini] Connected! Sending setup...');
 
         const setupMessage = {
           setup: {
             model: 'models/gemini-3.5-live-translate-preview',
-            generationConfig: {
-              responseModalities: ['AUDIO'],
-              inputAudioTranscription: {},
-              outputAudioTranscription: {},
-              translationConfig: {
-                targetLanguageCode: targetLang,
-                echoTargetLanguage: echoTarget
+            generation_config: {
+              response_modalities: ['AUDIO'],
+              translation_config: {
+                target_language_code: targetLang,
+                echo_target_language: echoTarget
               }
             }
           }
@@ -84,39 +76,34 @@ wss.on('connection', (clientWs, req) => {
 
       geminiWs.on('message', (data) => {
         try {
-          const text = data.toString();
-          const response = JSON.parse(text);
+          const raw = JSON.parse(data.toString());
 
-          if (!isGeminiReady) {
+          if (raw.setupComplete || raw.setup_complete) {
             isGeminiReady = true;
-            console.log('[Gemini] Ready! Setup acknowledged.');
-            sendToClient('log', { message: `[3/3] 통역 준비 완료! 마이크로 말씀하세요.` });
-            sendToClient('status', { status: 'ready' });
+            console.log('✅ [Gemini] Setup Complete!');
+            sendToClient({ type: 'status', status: 'ready' });
+            return;
           }
 
-          // Relay response to client
-          sendToClient('gemini_response', { payload: response });
+          // Forward all Gemini events directly
+          sendToClient(raw);
         } catch (err) {
           console.error('[Gemini] Parse error:', err);
         }
       });
 
       geminiWs.on('close', (code, reason) => {
-        const reasonStr = reason ? reason.toString() : 'No reason provided';
-        console.log(`[Gemini] Closed. Code: ${code}, Reason: ${reasonStr}`);
+        console.log(`[Gemini] Closed (${code}): ${reason.toString()}`);
         isGeminiReady = false;
-        sendToClient('status', { status: 'closed', code, reason: reasonStr });
-        sendToClient('log', { message: `Gemini 연결 종료 (${code}: ${reasonStr})` });
+        sendToClient({ type: 'status', status: 'closed', code });
       });
 
       geminiWs.on('error', (err) => {
         console.error('[Gemini] Error:', err.message);
-        sendToClient('error', { error: err.message });
-        sendToClient('log', { message: `Gemini 통신 오류: ${err.message}` });
+        sendToClient({ type: 'error', error: err.message });
       });
     } catch (err) {
-      console.error('[Gemini] Connection setup exception:', err);
-      sendToClient('error', { error: err.message });
+      console.error('[Gemini] Setup error:', err);
     }
   };
 
@@ -127,27 +114,23 @@ wss.on('connection', (clientWs, req) => {
       if (parsed.type === 'start') {
         connectToGemini(parsed.config);
       } else if (parsed.type === 'audio_chunk') {
-        audioChunkCount++;
-        if (audioChunkCount % 20 === 0) {
-          console.log(`[Audio] Streaming PCM chunks... Total sent: ${audioChunkCount}`);
-        }
+        chunkCount++;
         if (geminiWs && geminiWs.readyState === WebSocket.OPEN) {
-          const realtimePayload = {
-            realtimeInput: {
-              mediaChunks: [
+          const payload = {
+            realtime_input: {
+              media_chunks: [
                 {
-                  mimeType: 'audio/pcm;rate=16000',
+                  mime_type: 'audio/pcm;rate=16000',
                   data: parsed.data
                 }
               ]
             }
           };
-          geminiWs.send(JSON.stringify(realtimePayload));
+          geminiWs.send(JSON.stringify(payload));
         }
       } else if (parsed.type === 'update_config') {
         connectToGemini(parsed.config);
       } else if (parsed.type === 'stop') {
-        console.log('[Client] Stop streaming requested');
         if (geminiWs && geminiWs.readyState === WebSocket.OPEN) {
           geminiWs.close();
         }
@@ -166,9 +149,5 @@ wss.on('connection', (clientWs, req) => {
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`=================================================`);
-  console.log(`🚀 Live Translation Server running at:`);
-  console.log(`   👉 Local:   http://localhost:${PORT}`);
-  console.log(`   👉 Network: http://192.168.219.102:${PORT}`);
-  console.log(`=================================================`);
+  console.log(`🚀 Live Translation Server running at http://localhost:${PORT}`);
 });
