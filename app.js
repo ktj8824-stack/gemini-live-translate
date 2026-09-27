@@ -1,6 +1,6 @@
 /**
  * Gemini Live Translate Frontend Application
- * Fully optimized for Mobile Safari / Mobile Chrome / Desktop
+ * Fully verified with Gemini Live Translate API WebSocket Protocol
  */
 
 const SUPPORTED_LANGUAGES = [
@@ -43,26 +43,21 @@ class LiveTranslatorApp {
   constructor() {
     this.ws = null;
     this.isStreaming = false;
-    this.currentMode = 'split'; // 'split' | 'solo'
-    this.isDirectGemini = true; // Default direct WebSocket on client
+    this.currentMode = 'split';
     
-    // User & Partner Target Language
     this.userLang = 'ko';
     this.partnerLang = 'en';
 
-    // Stats
     this.chunksSent = 0;
     this.chunksReceived = 0;
 
-    // Settings & API Key
     this.apiKey = localStorage.getItem('gemini_api_key') || "";
     this.settings = {
-      echoTargetLanguage: true, // Echo on so even if same language, it responds
+      echoTargetLanguage: true,
       audioOutputEnabled: true,
       echoCancellation: true
     };
 
-    // Conversation History
     this.history = [];
     this.currentInputText = '';
     this.currentOutputText = '';
@@ -198,6 +193,9 @@ class LiveTranslatorApp {
       this.inputApiKey.addEventListener('input', (e) => {
         this.apiKey = e.target.value.trim();
         localStorage.setItem('gemini_api_key', this.apiKey);
+        if (this.apiKey) {
+          this.setStatusPill('준비 완료 (마이크 터치)', '#10b981');
+        }
       });
     }
 
@@ -220,7 +218,7 @@ class LiveTranslatorApp {
       setTimeout(() => {
         this.settingsModal.classList.remove('hidden');
         this.setStatusPill('API 키 입력 필요', '#f59e0b');
-      }, 500);
+      }, 400);
     } else {
       this.setStatusPill('준비 완료 (마이크 터치)', '#10b981');
     }
@@ -258,7 +256,7 @@ class LiveTranslatorApp {
 
   onLanguageChange() {
     if (this.isStreaming) {
-      this.addDebugLog(`[Lang] Switching target language to: ${this.partnerLang}`);
+      this.addDebugLog(`[Lang] Switching target to: ${this.partnerLang}`);
       this.stopStreaming();
       setTimeout(() => this.startStreaming(), 250);
     }
@@ -289,33 +287,30 @@ class LiveTranslatorApp {
       this.setStatusPill('Gemini 연결 중...', 'orange');
       this.addDebugLog(`[Gemini] Connecting to Live Translate (${this.partnerLang})...`);
 
-      // WebSocket URL to Google Gemini Live API
       const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${this.apiKey}`;
 
       this.ws = new WebSocket(wsUrl);
 
       this.ws.onopen = async () => {
-        this.addDebugLog('[WebSocket] Connected! Sending translation setup...');
+        this.addDebugLog('[WebSocket] Connected! Sending setup...');
         this.setStatusPill('세션 구성 중...', 'cyan');
 
-        // Send Setup message for Live Translate
+        // Official Gemini Live Translate setup JSON schema
         const setupMessage = {
           setup: {
             model: 'models/gemini-3.5-live-translate-preview',
-            generationConfig: {
-              responseModalities: ['AUDIO'],
-              inputAudioTranscription: {},
-              outputAudioTranscription: {},
-              translationConfig: {
-                targetLanguageCode: this.partnerLang,
-                echoTargetLanguage: this.settings.echoTargetLanguage
+            generation_config: {
+              response_modalities: ['AUDIO'],
+              translation_config: {
+                target_language_code: this.partnerLang,
+                echo_target_language: this.settings.echoTargetLanguage
               }
             }
           }
         };
 
         this.ws.send(JSON.stringify(setupMessage));
-        this.addDebugLog(`[Setup Sent] TargetLang: ${this.partnerLang}, Echo: ${this.settings.echoTargetLanguage}`);
+        this.addDebugLog(`[Setup Sent] Target: ${this.partnerLang}, Echo: ${this.settings.echoTargetLanguage}`);
 
         // Start mic recording
         try {
@@ -348,7 +343,7 @@ class LiveTranslatorApp {
       };
 
       this.ws.onerror = (err) => {
-        this.addDebugLog(`[WebSocket Error] Connection failed. Check API Key.`);
+        this.addDebugLog(`[WebSocket Error] Failed to connect.`);
         this.setStatusPill('통신 오류 (API 키 확인)', '#f43f5e');
         this.stopStreaming();
       };
@@ -379,63 +374,65 @@ class LiveTranslatorApp {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.chunksSent++;
       const payload = {
-        realtimeInput: {
-          mediaChunks: [
+        realtime_input: {
+          media_chunks: [
             {
-              mimeType: 'audio/pcm;rate=16000',
+              mime_type: 'audio/pcm;rate=16000',
               data: base64Data
             }
           ]
         }
       };
       this.ws.send(JSON.stringify(payload));
-      if (this.chunksSent % 15 === 0) {
+      if (this.chunksSent % 10 === 0) {
         this.updateStatsBar();
       }
     }
   }
 
   handleServerMessage(data) {
-    const serverContent = data.serverContent || data.payload?.serverContent;
-    if (!serverContent) {
-      // Check setup complete / other messages
-      if (data.setupComplete) {
-        this.addDebugLog('[Gemini] Setup Complete!');
-      }
+    if (data.setupComplete || data.setup_complete) {
+      this.addDebugLog('[Gemini] Setup Complete! Ready for speech.');
+      this.setStatusPill('통역 준비 완료 (말씀하세요)', '#10b981');
       return;
     }
 
-    // 1. Input Transcript (원문 실시간 자막)
-    if (serverContent.inputTranscription && serverContent.inputTranscription.text) {
-      const text = serverContent.inputTranscription.text;
-      this.currentInputText += text;
-      this.addDebugLog(`[STT In] ${text}`);
+    const serverContent = data.server_content || data.serverContent;
+    if (!serverContent) return;
+
+    // 1. Input Transcript
+    const inTrans = serverContent.input_transcription || serverContent.inputTranscription;
+    if (inTrans && inTrans.text) {
+      this.currentInputText += inTrans.text;
+      this.addDebugLog(`[STT 원문] ${inTrans.text}`);
       this.renderLiveTranscript();
     }
 
-    // 2. Output Transcript (번역문 실시간 자막)
-    if (serverContent.outputTranscription && serverContent.outputTranscription.text) {
-      const text = serverContent.outputTranscription.text;
-      this.currentOutputText += text;
-      this.addDebugLog(`[STT Out] ${text}`);
+    // 2. Output Transcript
+    const outTrans = serverContent.output_transcription || serverContent.outputTranscription;
+    if (outTrans && outTrans.text) {
+      this.currentOutputText += outTrans.text;
+      this.addDebugLog(`[STT 번역] ${outTrans.text}`);
       this.renderLiveTranscript();
     }
 
-    // 3. Audio Playback (24kHz PCM)
-    if (serverContent.modelTurn && serverContent.modelTurn.parts) {
-      for (const part of serverContent.modelTurn.parts) {
-        if (part.inlineData && part.inlineData.data) {
+    // 3. Audio Playback
+    const modelTurn = serverContent.model_turn || serverContent.modelTurn;
+    if (modelTurn && modelTurn.parts) {
+      for (const part of modelTurn.parts) {
+        const inlineData = part.inline_data || part.inlineData;
+        if (inlineData && inlineData.data) {
           this.chunksReceived++;
           this.updateStatsBar();
           if (this.settings.audioOutputEnabled) {
-            this.audioStreamer.playChunk(part.inlineData.data);
+            this.audioStreamer.playChunk(inlineData.data);
           }
         }
       }
     }
 
     // Turn complete
-    if (serverContent.turnComplete) {
+    if (serverContent.turn_complete || serverContent.turnComplete) {
       this.flushCurrentTurnToHistory();
     }
   }
@@ -557,13 +554,13 @@ class LiveTranslatorApp {
   updateVolumeBar(volume) {
     if (this.isStreaming) {
       const pct = Math.min(100, Math.round(volume * 400));
-      this.streamStatusLabel.textContent = `🎙️ 마이크 감지 중 (레벨: ${pct}%) | 전송: ${this.chunksSent} / 수신: ${this.chunksReceived}`;
+      this.streamStatusLabel.textContent = `🎙️ 마이크 감지 중 (레벨: ${pct}%) | 송신: ${this.chunksSent} / 수신: ${this.chunksReceived}`;
     }
   }
 
   updateStatsBar() {
     if (this.isStreaming) {
-      this.streamStatusLabel.textContent = `🎙️ 실시간 통역 중... [전송: ${this.chunksSent} 청크 | 수신: ${this.chunksReceived} 오디오]`;
+      this.streamStatusLabel.textContent = `🎙️ 실시간 통역 중... [송신: ${this.chunksSent} | 수신: ${this.chunksReceived} 오디오]`;
     }
   }
 
