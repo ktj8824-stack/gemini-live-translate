@@ -1,8 +1,5 @@
 /**
  * High-Precision Realtime Audio Streamer for Gemini Live Translate
- * - Captures mic, cleanly resamples to 16kHz
- * - Accumulates exact 100ms (1600 samples) PCM chunks for low-latency streaming
- * - Plays back 24kHz 16-bit PCM smoothly with queue scheduling
  */
 class AudioStreamer {
   constructor({ onAudioChunk, onInputVolume, onOutputVolume, onDebugLog }) {
@@ -18,7 +15,6 @@ class AudioStreamer {
     this.isRecording = false;
 
     // 16kHz 100ms = 1600 samples
-    this.targetSampleRate = 16000;
     this.chunkSampleSize = 1600; 
     this.sampleAccumulator = [];
 
@@ -67,11 +63,10 @@ class AudioStreamer {
       }
 
       const inputRate = this.inputAudioContext.sampleRate;
-      this.onDebugLog(`[Mic] Hardware: ${inputRate}Hz -> 16kHz (100ms chunks)`);
+      this.onDebugLog(`[Mic] Hardware: ${inputRate}Hz -> 16kHz (100ms)`);
 
       const source = this.inputAudioContext.createMediaStreamSource(this.mediaStream);
 
-      // Buffer size 2048 or 4096
       const bufferSize = 2048;
       this.scriptProcessor = this.inputAudioContext.createScriptProcessor(bufferSize, 1, 1);
 
@@ -80,7 +75,7 @@ class AudioStreamer {
 
         const inputData = event.inputBuffer.getChannelData(0);
 
-        // Volume meter calculation
+        // Volume meter
         let sum = 0;
         for (let i = 0; i < inputData.length; i++) {
           sum += inputData[i] * inputData[i];
@@ -90,19 +85,19 @@ class AudioStreamer {
           this.onInputVolume(rms);
         }
 
-        // Resample native rate to 16kHz
+        // Resample native to 16kHz
         const resampled = this.resampleTo16k(inputData, inputRate);
         
-        // Push to accumulator
+        // Accumulate
         for (let i = 0; i < resampled.length; i++) {
           this.sampleAccumulator.push(resampled[i]);
         }
 
-        // When 100ms (1600 samples) accumulated, send exact 100ms chunk
+        // Send 100ms (1600 samples)
         while (this.sampleAccumulator.length >= this.chunkSampleSize) {
           const chunkSamples = this.sampleAccumulator.splice(0, this.chunkSampleSize);
           const pcm16 = this.floatTo16BitPCM(chunkSamples);
-          const base64 = this.arrayBufferToBase64(pcm16.buffer);
+          const base64 = this.pcm16ToBase64(pcm16);
 
           if (this.onAudioChunk) {
             this.onAudioChunk(base64);
@@ -143,9 +138,6 @@ class AudioStreamer {
     this.onDebugLog('[Audio] Mic stopped');
   }
 
-  /**
-   * Resample Float32 input buffer to 16000Hz
-   */
   resampleTo16k(inputBuffer, inputSampleRate) {
     if (inputSampleRate === 16000) {
       return inputBuffer;
@@ -163,22 +155,27 @@ class AudioStreamer {
     return result;
   }
 
-  /**
-   * Convert float samples [-1.0, 1.0] to 16-bit PCM Int16 Little-Endian
-   */
   floatTo16BitPCM(samples) {
     const buffer = new ArrayBuffer(samples.length * 2);
     const view = new DataView(buffer);
     for (let i = 0; i < samples.length; i++) {
       const s = Math.max(-1, Math.min(1, samples[i]));
-      view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true); // true = Little-Endian
+      view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
     }
     return new Int16Array(buffer);
   }
 
-  /**
-   * Play 24kHz 16-bit PCM audio chunk received from Gemini
-   */
+  pcm16ToBase64(int16Array) {
+    const uint8Array = new Uint8Array(int16Array.buffer);
+    let binary = '';
+    const len = uint8Array.byteLength;
+    for (let i = 0; i < len; i += 1024) {
+      const slice = uint8Array.subarray(i, Math.min(i + 1024, len));
+      binary += String.fromCharCode.apply(null, slice);
+    }
+    return btoa(binary);
+  }
+
   playChunk(base64Data) {
     try {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -202,7 +199,7 @@ class AudioStreamer {
       const float32Array = new Float32Array(sampleCount);
 
       for (let i = 0; i < sampleCount; i++) {
-        const int16 = dataView.getInt16(i * 2, true); // Little-Endian
+        const int16 = dataView.getInt16(i * 2, true);
         float32Array[i] = int16 < 0 ? int16 / 0x8000 : int16 / 0x7FFF;
       }
 
@@ -232,16 +229,6 @@ class AudioStreamer {
     } catch (err) {
       console.error('[AudioStreamer] Error playing chunk:', err);
     }
-  }
-
-  arrayBufferToBase64(buffer) {
-    let binary = '';
-    const bytes = new Uint8Array(buffer);
-    const len = bytes.byteLength;
-    for (let i = 0; i < len; i++) {
-      binary += String.fromCharCode(bytes[i]);
-    }
-    return btoa(binary);
   }
 }
 

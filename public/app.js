@@ -309,7 +309,7 @@ class LiveTranslatorApp {
         };
 
         this.ws.send(JSON.stringify(setupMessage));
-        this.addDebugLog(`[Setup Sent] Target: ${this.partnerLang}, Echo: ${this.settings.echoTargetLanguage}`);
+        this.addDebugLog(`[Setup Sent] Target: ${this.partnerLang}`);
 
         // Start mic recording
         try {
@@ -336,7 +336,7 @@ class LiveTranslatorApp {
       };
 
       this.ws.onclose = (ev) => {
-        this.addDebugLog(`[WebSocket Closed] Code: ${ev.code}, Reason: ${ev.reason || 'Normal'}`);
+        this.addDebugLog(`[WebSocket Closed] Code: ${ev.code}`);
         this.setStatusPill('대기 중', '#94a3b8');
         this.stopStreaming();
       };
@@ -383,7 +383,7 @@ class LiveTranslatorApp {
         }
       };
       this.ws.send(JSON.stringify(payload));
-      if (this.chunksSent % 10 === 0) {
+      if (this.chunksSent % 5 === 0) {
         this.updateStatsBar();
       }
     }
@@ -396,11 +396,11 @@ class LiveTranslatorApp {
       return;
     }
 
-    const serverContent = data.server_content || data.serverContent;
+    const serverContent = data.serverContent || data.server_content || data.payload?.serverContent;
     if (!serverContent) return;
 
     // 1. Input Transcript
-    const inTrans = serverContent.input_transcription || serverContent.inputTranscription;
+    const inTrans = serverContent.inputTranscription || serverContent.input_transcription;
     if (inTrans && inTrans.text) {
       this.currentInputText += inTrans.text;
       this.addDebugLog(`[STT 원문] ${inTrans.text}`);
@@ -408,7 +408,7 @@ class LiveTranslatorApp {
     }
 
     // 2. Output Transcript
-    const outTrans = serverContent.output_transcription || serverContent.outputTranscription;
+    const outTrans = serverContent.outputTranscription || serverContent.output_transcription;
     if (outTrans && outTrans.text) {
       this.currentOutputText += outTrans.text;
       this.addDebugLog(`[STT 번역] ${outTrans.text}`);
@@ -416,13 +416,14 @@ class LiveTranslatorApp {
     }
 
     // 3. Audio Playback
-    const modelTurn = serverContent.model_turn || serverContent.modelTurn;
+    const modelTurn = serverContent.modelTurn || serverContent.model_turn;
     if (modelTurn && modelTurn.parts) {
       for (const part of modelTurn.parts) {
-        const inlineData = part.inline_data || part.inlineData;
+        const inlineData = part.inlineData || part.inline_data;
         if (inlineData && inlineData.data) {
           this.chunksReceived++;
           this.updateStatsBar();
+          this.addDebugLog(`[오디오 수신] chunk #${this.chunksReceived}`);
           if (this.settings.audioOutputEnabled) {
             this.audioStreamer.playChunk(inlineData.data);
           }
@@ -430,7 +431,7 @@ class LiveTranslatorApp {
       }
     }
 
-    if (serverContent.turn_complete || serverContent.turnComplete) {
+    if (serverContent.turnComplete || serverContent.turn_complete) {
       this.flushCurrentTurnToHistory();
     }
   }
