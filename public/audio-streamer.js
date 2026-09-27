@@ -1,7 +1,8 @@
 /**
- * Mobile-Robust Realtime Audio Streamer & Player for Gemini Live Translate
- * - Captures mic at native hardware rate & resamples cleanly to 16kHz 16-bit PCM Mono
- * - Plays back 24kHz 16-bit PCM smoothly with Mobile AudioContext Unlock
+ * High-Precision Realtime Audio Streamer for Gemini Live Translate
+ * - Captures mic, cleanly resamples to 16kHz
+ * - Accumulates exact 100ms (1600 samples) PCM chunks for low-latency streaming
+ * - Plays back 24kHz 16-bit PCM smoothly with queue scheduling
  */
 class AudioStreamer {
   constructor({ onAudioChunk, onInputVolume, onOutputVolume, onDebugLog }) {
@@ -16,31 +17,29 @@ class AudioStreamer {
     this.scriptProcessor = null;
     this.isRecording = false;
 
+    // 16kHz 100ms = 1600 samples
+    this.targetSampleRate = 16000;
+    this.chunkSampleSize = 1600; 
+    this.sampleAccumulator = [];
+
+    // Output playback queue
     this.nextPlayTime = 0;
     this.outputSampleRate = 24000;
-    this.targetInputRate = 16000;
   }
 
-  // Mobile AudioContext Unlocker on user gesture
   async unlockAudio() {
     try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
       if (!this.outputAudioContext || this.outputAudioContext.state === 'closed') {
-        const AudioCtx = window.AudioContext || window.webkitAudioContext;
         this.outputAudioContext = new AudioCtx({ sampleRate: this.outputSampleRate });
       }
       if (this.outputAudioContext.state === 'suspended') {
         await this.outputAudioContext.resume();
       }
-      // Play a tiny silent buffer to warm up mobile audio pipeline
-      const silentBuffer = this.outputAudioContext.createBuffer(1, 1, this.outputSampleRate);
-      const source = this.outputAudioContext.createBufferSource();
-      source.buffer = silentBuffer;
-      source.connect(this.outputAudioContext.destination);
-      source.start(0);
       this.nextPlayTime = this.outputAudioContext.currentTime;
-      this.onDebugLog('[Audio] Output audio unlocked and resumed');
+      this.onDebugLog('[Audio] AudioContext Active: ' + this.outputAudioContext.state);
     } catch (e) {
-      console.warn('[Audio] Unlock warning:', e);
+      console.warn('[Audio] Unlock error:', e);
     }
   }
 
@@ -48,6 +47,7 @@ class AudioStreamer {
     if (this.isRecording) return;
 
     await this.unlockAudio();
+    this.sampleAccumulator = [];
 
     try {
       this.mediaStream = await navigator.mediaDevices.getUserMedia({
@@ -67,12 +67,12 @@ class AudioStreamer {
       }
 
       const inputRate = this.inputAudioContext.sampleRate;
-      this.onDebugLog(`[Mic] Started. Hardware SampleRate: ${inputRate}Hz -> Resampling to 16kHz`);
+      this.onDebugLog(`[Mic] Hardware: ${inputRate}Hz -> 16kHz (100ms chunks)`);
 
       const source = this.inputAudioContext.createMediaStreamSource(this.mediaStream);
 
-      // Buffer size 4096 gives ~85ms latency at 48kHz
-      const bufferSize = 4096;
+      // Buffer size 2048 or 4096
+      const bufferSize = 2048;
       this.scriptProcessor = this.inputAudioContext.createScriptProcessor(bufferSize, 1, 1);
 
       this.scriptProcessor.onaudioprocess = (event) => {
@@ -80,7 +80,7 @@ class AudioStreamer {
 
         const inputData = event.inputBuffer.getChannelData(0);
 
-        // Calculate input volume
+        // Volume meter calculation
         let sum = 0;
         for (let i = 0; i < inputData.length; i++) {
           sum += inputData[i] * inputData[i];
@@ -90,15 +90,23 @@ class AudioStreamer {
           this.onInputVolume(rms);
         }
 
-        // Resample native rate to 16000Hz
-        const resampled = this.downsampleBuffer(inputData, inputRate, this.targetInputRate);
+        // Resample native rate to 16kHz
+        const resampled = this.resampleTo16k(inputData, inputRate);
+        
+        // Push to accumulator
+        for (let i = 0; i < resampled.length; i++) {
+          this.sampleAccumulator.push(resampled[i]);
+        }
 
-        // Convert to 16-bit PCM Little Endian
-        const pcm16 = this.floatTo16BitPCM(resampled);
-        const base64Chunk = this.arrayBufferToBase64(pcm16.buffer);
+        // When 100ms (1600 samples) accumulated, send exact 100ms chunk
+        while (this.sampleAccumulator.length >= this.chunkSampleSize) {
+          const chunkSamples = this.sampleAccumulator.splice(0, this.chunkSampleSize);
+          const pcm16 = this.floatTo16BitPCM(chunkSamples);
+          const base64 = this.arrayBufferToBase64(pcm16.buffer);
 
-        if (this.onAudioChunk) {
-          this.onAudioChunk(base64Chunk);
+          if (this.onAudioChunk) {
+            this.onAudioChunk(base64);
+          }
         }
       };
 
@@ -131,38 +139,41 @@ class AudioStreamer {
       this.inputAudioContext = null;
     }
 
-    this.onDebugLog('[Audio] Recording stopped');
+    this.sampleAccumulator = [];
+    this.onDebugLog('[Audio] Mic stopped');
   }
 
-  downsampleBuffer(buffer, sampleRate, targetRate) {
-    if (sampleRate === targetRate) {
-      return buffer;
+  resampleTo16k(inputBuffer, inputSampleRate) {
+    if (inputSampleRate === 16000) {
+      return inputBuffer;
     }
-    const sampleRateRatio = sampleRate / targetRate;
-    const newLength = Math.round(buffer.length / sampleRateRatio);
+    const ratio = inputSampleRate / 16000;
+    const newLength = Math.round(inputBuffer.length / ratio);
     const result = new Float32Array(newLength);
-    let offsetResult = 0;
-    let offsetBuffer = 0;
-
-    while (offsetResult < result.length) {
-      const nextOffsetBuffer = Math.round((offsetResult + 1) * sampleRateRatio);
-      let accum = 0;
-      let count = 0;
-      for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i++) {
-        accum += buffer[i];
-        count++;
-      }
-      result[offsetResult] = count > 0 ? accum / count : 0;
-      offsetResult++;
-      offsetBuffer = nextOffsetBuffer;
+    for (let i = 0; i < newLength; i++) {
+      const originIndex = i * ratio;
+      const indexFloor = Math.floor(originIndex);
+      const indexCeil = Math.min(inputBuffer.length - 1, Math.ceil(originIndex));
+      const fraction = originIndex - indexFloor;
+      result[i] = inputBuffer[indexFloor] * (1 - fraction) + inputBuffer[indexCeil] * fraction;
     }
     return result;
   }
 
+  floatTo16BitPCM(samples) {
+    const buffer = new ArrayBuffer(samples.length * 2);
+    const view = new DataView(buffer);
+    for (let i = 0; i < samples.length; i++) {
+      const s = Math.max(-1, Math.min(1, samples[i]));
+      view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+    }
+    return new Int16Array(buffer);
+  }
+
   playChunk(base64Data) {
     try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
       if (!this.outputAudioContext || this.outputAudioContext.state === 'closed') {
-        const AudioCtx = window.AudioContext || window.webkitAudioContext;
         this.outputAudioContext = new AudioCtx({ sampleRate: this.outputSampleRate });
       }
 
@@ -178,7 +189,7 @@ class AudioStreamer {
       }
 
       const dataView = new DataView(bytes.buffer);
-      const sampleCount = len / 2;
+      const sampleCount = Math.floor(len / 2);
       const float32Array = new Float32Array(sampleCount);
 
       for (let i = 0; i < sampleCount; i++) {
@@ -212,16 +223,6 @@ class AudioStreamer {
     } catch (err) {
       console.error('[AudioStreamer] Error playing chunk:', err);
     }
-  }
-
-  floatTo16BitPCM(float32Array) {
-    const buffer = new ArrayBuffer(float32Array.length * 2);
-    const view = new DataView(buffer);
-    for (let i = 0; i < float32Array.length; i++) {
-      let s = Math.max(-1, Math.min(1, float32Array[i]));
-      view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
-    }
-    return new Int16Array(buffer);
   }
 
   arrayBufferToBase64(buffer) {
