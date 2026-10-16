@@ -29,11 +29,19 @@ class AudioStreamer {
     try {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
       if (!this.outputAudioContext || this.outputAudioContext.state === 'closed') {
-        this.outputAudioContext = new AudioCtx({ sampleRate: this.outputSampleRate });
+        this.outputAudioContext = new AudioCtx();
       }
       if (this.outputAudioContext.state === 'suspended') {
         await this.outputAudioContext.resume();
       }
+
+      // Unlock iOS Safari hardware playback via dummy silent buffer
+      const silence = this.outputAudioContext.createBuffer(1, 1, 22050);
+      const src = this.outputAudioContext.createBufferSource();
+      src.buffer = silence;
+      src.connect(this.outputAudioContext.destination);
+      src.start(0);
+
       this.nextPlayTime = this.outputAudioContext.currentTime;
       this.onDebugLog('[Audio] Output Engine Ready: ' + this.outputAudioContext.state);
     } catch (e) {
@@ -254,7 +262,7 @@ class AudioStreamer {
     try {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
       if (!this.outputAudioContext || this.outputAudioContext.state === 'closed') {
-        this.outputAudioContext = new AudioCtx({ sampleRate: this.outputSampleRate });
+        this.outputAudioContext = new AudioCtx();
       }
 
       if (this.outputAudioContext.state === 'suspended') {
@@ -277,12 +285,19 @@ class AudioStreamer {
         float32Array[i] = int16 < 0 ? int16 / 0x8000 : int16 / 0x7FFF;
       }
 
-      const audioBuffer = this.outputAudioContext.createBuffer(1, sampleCount, this.outputSampleRate);
+      // Gemini Live outputs 24000Hz PCM
+      const audioBuffer = this.outputAudioContext.createBuffer(1, sampleCount, 24000);
       audioBuffer.getChannelData(0).set(float32Array);
 
       const source = this.outputAudioContext.createBufferSource();
       source.buffer = audioBuffer;
-      source.connect(this.outputAudioContext.destination);
+
+      // Master Gain Node at 100% volume
+      const masterGain = this.outputAudioContext.createGain();
+      masterGain.gain.setValueAtTime(1.0, this.outputAudioContext.currentTime);
+
+      source.connect(masterGain);
+      masterGain.connect(this.outputAudioContext.destination);
 
       const currentTime = this.outputAudioContext.currentTime;
       if (this.nextPlayTime < currentTime) {

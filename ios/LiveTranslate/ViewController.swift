@@ -24,6 +24,7 @@ class ViewController: UIViewController, WKUIDelegate, WKNavigationDelegate {
         do {
             // Allows microphone input while outputting speech to speaker / bluetooth
             try audioSession.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothHFP, .allowBluetoothA2DP, .mixWithOthers])
+            try audioSession.overrideOutputAudioPort(.speaker)
             try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
         } catch {
             print("[AudioSession] Setup error: \(error)")
