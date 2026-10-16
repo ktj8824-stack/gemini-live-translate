@@ -28,6 +28,65 @@ app.get('/api/status', (req, res) => {
   });
 });
 
+// Autonomous AI Learning Analyzer (Background Knowledge & Glossary Extractor)
+app.post('/api/learn-auto', async (req, res) => {
+  try {
+    const { history, currentRules, apiKey } = req.body;
+    const key = apiKey || GEMINI_API_KEY;
+
+    if (!key) {
+      return res.status(400).json({ error: 'API key required' });
+    }
+
+    if (!history || history.length === 0) {
+      return res.json({ newRules: [], summary: '' });
+    }
+
+    const prompt = `You are an Autonomous AI Linguist & Memory Engine.
+Analyze the following bilingual conversation transcript between two users:
+${JSON.stringify(history, null, 2)}
+
+Already known memory rules:
+${JSON.stringify(currentRules || [])}
+
+Tasks:
+1. Identify any key proper nouns, brand names, technical/specialized terms, jargon, slang, or recurring phrases that need consistent, accurate future translation.
+2. Summarize the ongoing context / domain of the conversation in 1 concise sentence (e.g. "Real estate contract negotiation with a US client").
+3. Output ONLY a valid JSON object matching this schema:
+{
+  "contextSummary": "1 sentence domain/context summary",
+  "extractedRules": [
+    { "src": "original phrase/term", "tgt": "ideal translation", "reason": "why this should be remembered" }
+  ]
+}
+Do not include markdown code block quotes. Output pure JSON only.`;
+
+    const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { responseMimeType: 'application/json' }
+      })
+    });
+
+    const data = await geminiRes.json();
+    console.log('[AutoLearn Response]', JSON.stringify(data));
+    const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+    let parsed = {};
+    try {
+      parsed = JSON.parse(rawText);
+    } catch (e) {
+      console.error('[AutoLearn] JSON parse error:', e, rawText);
+    }
+
+    res.json(parsed);
+  } catch (err) {
+    console.error('[AutoLearn] Error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 const GEMINI_WS_URL = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${GEMINI_API_KEY}`;
 
 wss.on('connection', (clientWs, req) => {
@@ -47,13 +106,22 @@ wss.on('connection', (clientWs, req) => {
       try { geminiWs.close(); } catch (e) {}
     }
 
+    const apiKey = config?.apiKey || GEMINI_API_KEY;
     const targetLang = config?.targetLanguageCode || 'en';
     const echoTarget = config?.echoTargetLanguage ?? true;
+
+    if (!apiKey) {
+      console.error('[Gemini] No API key available');
+      sendToClient({ type: 'error', error: 'API 키가 필요합니다.' });
+      return;
+    }
+
+    const geminiUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${apiKey}`;
 
     console.log(`[Gemini] Connecting... TargetLang: ${targetLang}, Echo: ${echoTarget}`);
 
     try {
-      geminiWs = new WebSocket(GEMINI_WS_URL);
+      geminiWs = new WebSocket(geminiUrl);
 
       geminiWs.on('open', () => {
         console.log('[Gemini] Connected! Sending setup...');
@@ -62,7 +130,7 @@ wss.on('connection', (clientWs, req) => {
           setup: {
             model: 'models/gemini-3.5-live-translate-preview',
             generation_config: {
-              response_modalities: ['AUDIO'],
+              response_modalities: ['AUDIO', 'TEXT'],
               translation_config: {
                 target_language_code: targetLang,
                 echo_target_language: echoTarget

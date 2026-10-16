@@ -53,7 +53,7 @@ class LiveTranslatorApp {
 
     this.apiKey = localStorage.getItem('gemini_api_key') || "";
     this.settings = {
-      echoTargetLanguage: true,
+      echoTargetLanguage: false,
       audioOutputEnabled: true,
       echoCancellation: true
     };
@@ -72,8 +72,14 @@ class LiveTranslatorApp {
       onDebugLog: (msg) => this.addDebugLog(msg)
     });
 
+    this.learnedRules = JSON.parse(localStorage.getItem('gemini_learned_rules') || '[]');
+    this.conversationContextSummary = localStorage.getItem('gemini_context_summary') || '';
+    this.autoLearnDebounceTimer = null;
+    
     this.initElements();
     this.populateLanguageOptions();
+    this.renderLearnedRules();
+    this.updateAiLearnBadge('idle');
     this.bindEvents();
     this.checkApiKey();
   }
@@ -114,6 +120,13 @@ class LiveTranslatorApp {
     this.micIcon = document.getElementById('mic-icon');
     this.stopIcon = document.getElementById('stop-icon');
     this.statusPill = document.getElementById('connection-status-pill');
+    this.aiLearnIndicator = document.getElementById('ai-learn-indicator');
+    this.aiLearnCount = document.getElementById('ai-learn-count');
+
+    this.dictSourceInput = document.getElementById('dict-source-word');
+    this.dictTargetInput = document.getElementById('dict-target-word');
+    this.btnAddDictRule = document.getElementById('btn-add-dict-rule');
+    this.dictRulesList = document.getElementById('dict-rules-list');
 
     this.inputApiKey = document.getElementById('input-api-key');
     if (this.inputApiKey) {
@@ -189,6 +202,10 @@ class LiveTranslatorApp {
     this.btnSettingsToggle.addEventListener('click', () => this.settingsModal.classList.remove('hidden'));
     this.btnCloseSettings.addEventListener('click', () => this.settingsModal.classList.add('hidden'));
 
+    this.aiLearnIndicator?.addEventListener('click', () => {
+      this.settingsModal.classList.remove('hidden');
+    });
+
     if (this.inputApiKey) {
       this.inputApiKey.addEventListener('input', (e) => {
         this.apiKey = e.target.value.trim();
@@ -208,9 +225,189 @@ class LiveTranslatorApp {
       this.settings.audioOutputEnabled = e.target.checked;
     });
 
-    this.settingEchoCancellation.addEventListener('change', (e) => {
-      this.settings.echoCancellation = e.target.checked;
+    this.btnAddDictRule?.addEventListener('click', () => this.addDictionaryRule());
+    this.dictTargetInput?.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') this.addDictionaryRule();
     });
+  }
+
+  addDictionaryRule(sourceVal = null, targetVal = null) {
+    const src = (sourceVal || this.dictSourceInput?.value || '').trim();
+    const tgt = (targetVal || this.dictTargetInput?.value || '').trim();
+
+    if (!src || !tgt) {
+      alert('원문 단어와 맞춤 번역어를 모두 입력해주세요.');
+      return;
+    }
+
+    // Remove duplicates
+    this.learnedRules = this.learnedRules.filter(r => r.src.toLowerCase() !== src.toLowerCase());
+    this.learnedRules.unshift({ src, tgt, timestamp: Date.now() });
+    localStorage.setItem('gemini_learned_rules', JSON.stringify(this.learnedRules));
+
+    if (this.dictSourceInput) this.dictSourceInput.value = '';
+    if (this.dictTargetInput) this.dictTargetInput.value = '';
+
+    this.renderLearnedRules();
+    this.addDebugLog(`[AI Memory] New rule learned: "${src}" -> "${tgt}"`);
+  }
+
+  deleteDictionaryRule(src) {
+    this.learnedRules = this.learnedRules.filter(r => r.src !== src);
+    localStorage.setItem('gemini_learned_rules', JSON.stringify(this.learnedRules));
+    this.renderLearnedRules();
+  }
+
+  renderLearnedRules() {
+    if (!this.dictRulesList) return;
+    if (this.learnedRules.length === 0) {
+      this.dictRulesList.innerHTML = '<span style="font-size: 0.8rem; color: #64748b;">아직 등록된 맞춤 학습 단어가 없습니다.</span>';
+      return;
+    }
+
+    this.dictRulesList.innerHTML = '';
+    this.learnedRules.forEach(rule => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex; justify-content:space-between; align-items:center; background:rgba(255,255,255,0.05); padding: 5px 10px; border-radius: 6px; font-size: 0.82rem;';
+      row.innerHTML = `
+        <span><strong style="color:#00e5ff;">${rule.src}</strong> ➔ <span style="color:#a78bfa;">${rule.tgt}</span></span>
+        <button class="rule-del-btn" style="background:none; border:none; color:#ef4444; cursor:pointer; font-size:0.9rem;">✕</button>
+      `;
+      row.querySelector('.rule-del-btn').addEventListener('click', () => this.deleteDictionaryRule(rule.src));
+      this.dictRulesList.appendChild(row);
+    });
+  }
+
+  getSystemInstructionText() {
+    let customGlossary = '';
+    if (this.learnedRules && this.learnedRules.length > 0) {
+      const topRules = this.learnedRules.slice(0, 8);
+      customGlossary = ` Key Terms: ` + topRules.map(r => `"${r.src}"->"${r.tgt}"`).join(', ');
+    }
+
+    return `Realtime simultaneous interpreter. Translate directly to ${this.partnerLang}. No intro/chitchat.${customGlossary}`;
+  }
+
+  updateAiLearnBadge(status = 'idle', count = null) {
+    if (!this.aiLearnIndicator) return;
+    const ruleCount = count ?? this.learnedRules.length;
+    if (this.aiLearnCount) this.aiLearnCount.textContent = ruleCount;
+
+    const textEl = this.aiLearnIndicator.querySelector('.ai-learn-text');
+
+    if (status === 'learning') {
+      this.aiLearnIndicator.className = 'ai-learning-pill learning';
+      if (textEl) textEl.textContent = 'AI 학습중';
+    } else if (status === 'success') {
+      this.aiLearnIndicator.className = 'ai-learning-pill success';
+      if (textEl) textEl.textContent = '학습 완료';
+      setTimeout(() => {
+        this.updateAiLearnBadge('idle');
+      }, 3000);
+    } else {
+      this.aiLearnIndicator.className = 'ai-learning-pill idle';
+      if (textEl) textEl.textContent = 'AI 기억 ' + ruleCount;
+    }
+  }
+
+  async triggerAutoLearn() {
+    if (this.history.length === 0) return;
+
+    this.updateAiLearnBadge('learning');
+
+    try {
+      this.addDebugLog('[Auto AI] Background learning analyzing conversation...');
+      const recentTurns = this.history.slice(-10);
+
+      const prompt = `You are an Autonomous AI Linguist & Memory Engine.
+Analyze the following bilingual conversation transcript between two users:
+${JSON.stringify(recentTurns, null, 2)}
+
+Already known memory rules:
+${JSON.stringify(this.learnedRules || [])}
+
+Tasks:
+1. Identify any key proper nouns, brand names, technical/specialized terms, jargon, slang, or recurring phrases that need consistent, accurate future translation.
+2. Summarize the ongoing context / domain of the conversation in 1 concise sentence (e.g. "Real estate contract negotiation with a US client").
+3. Output ONLY a valid JSON object matching this schema:
+{
+  "contextSummary": "1 sentence domain/context summary",
+  "extractedRules": [
+    { "src": "original phrase/term", "tgt": "ideal translation", "reason": "why this should be remembered" }
+  ]
+}
+Do not include markdown code block quotes. Output pure JSON only.`;
+
+      const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${this.apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { responseMimeType: 'application/json' }
+        })
+      });
+
+      if (!geminiRes.ok) {
+        this.updateAiLearnBadge('idle');
+        return;
+      }
+      const rawData = await geminiRes.json();
+      const rawText = rawData?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+      let data = {};
+      try {
+        data = JSON.parse(rawText);
+      } catch (e) {
+        data = {};
+      }
+
+      let newlyAdded = 0;
+      if (data.contextSummary) {
+        this.conversationContextSummary = data.contextSummary;
+        localStorage.setItem('gemini_context_summary', this.conversationContextSummary);
+      }
+
+      if (Array.isArray(data.extractedRules)) {
+        data.extractedRules.forEach(rule => {
+          if (!rule.src || !rule.tgt) return;
+          const exists = this.learnedRules.some(r => r.src.toLowerCase() === rule.src.toLowerCase());
+          if (!exists) {
+            this.learnedRules.unshift({
+              src: rule.src,
+              tgt: rule.tgt,
+              reason: rule.reason || '대화에서 AI가 자율 학습함',
+              autoLearned: true,
+              timestamp: Date.now()
+            });
+            newlyAdded++;
+          }
+        });
+      }
+
+      if (newlyAdded > 0) {
+        localStorage.setItem('gemini_learned_rules', JSON.stringify(this.learnedRules));
+        this.renderLearnedRules();
+        this.addDebugLog(`✨ [자율 학습 완료] AI가 새로운 용어/규칙 ${newlyAdded}개를 자동 습득했습니다!`);
+        this.showAutoLearnToast(`🧠 AI가 새로운 단어 ${newlyAdded}개를 자동 학습했습니다!`);
+        this.updateAiLearnBadge('success');
+      } else {
+        this.updateAiLearnBadge('idle');
+      }
+    } catch (e) {
+      console.warn('[AutoLearn] Background analysis error:', e);
+      this.updateAiLearnBadge('idle');
+    }
+  }
+
+  showAutoLearnToast(msg) {
+    const toast = document.createElement('div');
+    toast.style.cssText = 'position:fixed; bottom:20px; right:20px; background:linear-gradient(135deg, #00e5ff, #8b5cf6); color:#000; font-weight:700; padding:10px 18px; border-radius:30px; box-shadow:0 8px 24px rgba(0,0,0,0.5); z-index:9999; font-size:0.85rem; animation:fadeIn 0.3s ease-in-out;';
+    toast.textContent = msg;
+    document.body.appendChild(toast);
+    setTimeout(() => {
+      toast.style.opacity = '0';
+      toast.style.transition = 'opacity 0.5s ease';
+      setTimeout(() => toast.remove(), 500);
+    }, 3500);
   }
 
   checkApiKey() {
@@ -284,22 +481,58 @@ class LiveTranslatorApp {
       this.chunksSent = 0;
       this.chunksReceived = 0;
       this.updateStatusUI(true);
-      this.setStatusPill('Gemini 연결 중...', 'orange');
-      this.addDebugLog(`[Gemini] Connecting to Live Translate (${this.partnerLang})...`);
 
-      const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${this.apiKey}`;
+      // [CRITICAL] 1. Start microphone immediately inside user click gesture
+      // This prevents browsers (iOS Safari / Chrome) from blocking mic or AudioContext
+      this.setStatusPill('마이크 장치 확인 중...', '#00e5ff');
+      this.addDebugLog('[Mic] 마이크 장치 및 권한 요청 중...');
 
-      this.ws = new WebSocket(wsUrl);
+      try {
+        await this.audioStreamer.startRecording({
+          echoCancellation: this.settings.echoCancellation
+        });
+        this.isStreaming = true;
+      } catch (micErr) {
+        this.addDebugLog(`[Mic Error] ${micErr.message}`);
+        this.updateStatusUI(false);
+        this.setStatusPill('마이크 오류', '#f43f5e');
+        alert(micErr.message);
+        this.stopStreaming();
+        return;
+      }
+
+      // 2. Connect to Gemini Live Translate WebSocket
+      this.setStatusPill('Gemini 통역 서버 연결 중...', 'orange');
+      this.streamStatusLabel.textContent = '마이크 정상 감지 중 🎙️ | Gemini 연결 중...';
+      this.addDebugLog(`[Gemini] Connecting directly to Live Translate (${this.partnerLang})...`);
+
+      const geminiUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${this.apiKey}`;
+      this.ws = new WebSocket(geminiUrl);
 
       this.ws.onopen = async () => {
-        this.addDebugLog('[WebSocket] Connected! Sending setup...');
+        this.addDebugLog('[WebSocket] Connected directly to Gemini! Sending setup...');
         this.setStatusPill('세션 구성 중...', 'cyan');
+
+        const srcLangObj = SUPPORTED_LANGUAGES.find(l => l.code === this.userLang);
+        const tgtLangObj = SUPPORTED_LANGUAGES.find(l => l.code === this.partnerLang);
+        const srcName = srcLangObj ? srcLangObj.name : this.userLang;
+        const tgtName = tgtLangObj ? tgtLangObj.name : this.partnerLang;
+
+        const systemPrompt = `You are an elite simultaneous interpreter providing live translation.
+Source Language: ${srcName} (${this.userLang})
+Target Language: ${tgtName} (${this.partnerLang})
+
+CRITICAL MANDATES:
+1. Translate everything you hear in ${srcName} into fluent, natural ${tgtName} immediately.
+2. Output BOTH realtime translated text and realtime spoken audio in ${tgtName}.
+3. STRICT PROHIBITION: NEVER chat, never say greetings, never explain, never summarize, never ask questions, and never say filler like "Here is the translation:".
+4. Output EXCLUSIVELY the translated content. If the speaker says something, translate it verbatim into ${tgtName}.`;
 
         const setupMessage = {
           setup: {
             model: 'models/gemini-3.5-live-translate-preview',
             generation_config: {
-              response_modalities: ['AUDIO'],
+              response_modalities: ['AUDIO', 'TEXT'],
               translation_config: {
                 target_language_code: this.partnerLang,
                 echo_target_language: this.settings.echoTargetLanguage
@@ -309,21 +542,9 @@ class LiveTranslatorApp {
         };
 
         this.ws.send(JSON.stringify(setupMessage));
-        this.addDebugLog(`[Setup Sent] Target: ${this.partnerLang}`);
-
-        // Start mic recording
-        try {
-          await this.audioStreamer.startRecording({
-            echoCancellation: this.settings.echoCancellation
-          });
-          this.isStreaming = true;
-          this.setStatusPill('통역 중 (듣는 중)', '#10b981');
-          this.streamStatusLabel.textContent = '음성을 듣고 실시간 통역 중입니다...';
-        } catch (micErr) {
-          this.addDebugLog(`[Mic Error] ${micErr.message}`);
-          alert('마이크 접근 권한이 필요합니다. 브라우저 설정에서 마이크를 허용해 주세요: ' + micErr.message);
-          this.stopStreaming();
-        }
+        this.addDebugLog(`[Setup Sent] ${this.userLang} -> ${this.partnerLang} (Interpreter Mode)`);
+        this.setStatusPill('통역 중 (듣는 중)', '#10b981');
+        this.streamStatusLabel.textContent = '음성을 듣고 실시간 통역 중입니다... (말씀하세요)';
       };
 
       this.ws.onmessage = async (event) => {
@@ -340,17 +561,36 @@ class LiveTranslatorApp {
           this.handleServerMessage(raw);
         } catch (e) {
           console.error('Parse error:', e, event.data);
+          this.addDebugLog(`[Message Parse Error] ${e.message}`);
         }
       };
 
       this.ws.onclose = (ev) => {
-        this.addDebugLog(`[WebSocket Closed] Code: ${ev.code}`);
-        this.setStatusPill('대기 중', '#94a3b8');
+        const reason = ev.reason || '';
+        this.addDebugLog(`[WebSocket Closed] Code: ${ev.code}, Reason: ${reason || 'None'}`);
+        
+        let alertMessage = null;
+        if (ev.code === 1011 || reason.includes('prepayment credits are depleted') || reason.includes('credits')) {
+          this.setStatusPill('API 크레딧 소진', '#f43f5e');
+          alertMessage = '⚠️ 구글 Gemini API 키의 크레딧/한도가 소진되었습니다.\n\n새로운 Gemini API 키를 발급받으신 후 상단 설정(⚙️) 아이콘을 눌러 새 키를 입력해 주세요.';
+        } else if (ev.code === 1006 || ev.code === 1007 || ev.code === 1008) {
+          this.setStatusPill('API 인증 실패', '#f43f5e');
+          alertMessage = `⚠️ Gemini API 연결 실패 (코드 ${ev.code})\n\nAPI 키가 올바른지 확인하거나 새로운 키로 변경해 주세요.\n사유: ${reason || '인증/네트워크 오류'}`;
+        } else if (ev.code !== 1000) {
+          this.setStatusPill('연결 종료', '#94a3b8');
+        } else {
+          this.setStatusPill('대기 중', '#94a3b8');
+        }
+
         this.stopStreaming();
+
+        if (alertMessage) {
+          setTimeout(() => alert(alertMessage), 100);
+        }
       };
 
       this.ws.onerror = (err) => {
-        this.addDebugLog(`[WebSocket Error] Failed to connect.`);
+        this.addDebugLog(`[WebSocket Error] Connection failed. Check API Key/Network.`);
         this.setStatusPill('통신 오류 (API 키 확인)', '#f43f5e');
         this.stopStreaming();
       };
@@ -375,6 +615,15 @@ class LiveTranslatorApp {
 
     this.updateStatusUI(false);
     this.flushCurrentTurnToHistory();
+
+    // Trigger AI Learning analysis immediately on stop
+    console.log('[AutoLearn Trigger] History length:', this.history.length);
+    if (this.history.length > 0) {
+      this.triggerAutoLearn();
+    } else {
+      // If no speech history was recorded yet, briefly show idle
+      this.updateAiLearnBadge('idle');
+    }
   }
 
   sendAudioChunk(base64Data) {
@@ -407,7 +656,7 @@ class LiveTranslatorApp {
     const serverContent = data.serverContent || data.server_content || data.payload?.serverContent;
     if (!serverContent) return;
 
-    // 1. Input Transcript
+    // 1. Input Transcript (User STT)
     const inTrans = serverContent.inputTranscription || serverContent.input_transcription;
     if (inTrans && inTrans.text) {
       this.currentInputText += inTrans.text;
@@ -415,18 +664,23 @@ class LiveTranslatorApp {
       this.renderLiveTranscript();
     }
 
-    // 2. Output Transcript
+    // 2. Output Transcript (Model Translation STT or Model Turn Text)
     const outTrans = serverContent.outputTranscription || serverContent.output_transcription;
     if (outTrans && outTrans.text) {
       this.currentOutputText += outTrans.text;
-      this.addDebugLog(`[STT 번역] ${outTrans.text}`);
+      this.addDebugLog(`[번역문] ${outTrans.text}`);
       this.renderLiveTranscript();
     }
 
-    // 3. Audio Playback
+    // 3. Model Turn (Audio output & direct text translation)
     const modelTurn = serverContent.modelTurn || serverContent.model_turn;
     if (modelTurn && modelTurn.parts) {
       for (const part of modelTurn.parts) {
+        if (part.text) {
+          this.currentOutputText += part.text;
+          this.addDebugLog(`[번역문] ${part.text}`);
+          this.renderLiveTranscript();
+        }
         const inlineData = part.inlineData || part.inline_data;
         if (inlineData && inlineData.data) {
           this.chunksReceived++;
@@ -504,10 +758,22 @@ class LiveTranslatorApp {
       const el = document.createElement('div');
       el.className = 'history-item';
       el.innerHTML = `
-        <div class="speaker">${h.time} [${h.fromLang} ➔ ${h.toLang}]</div>
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div class="speaker">${h.time} [${h.fromLang} ➔ ${h.toLang}]</div>
+          <button class="learn-btn" style="background:rgba(0,229,255,0.15); border:1px solid #00e5ff; color:#00e5ff; padding:2px 8px; border-radius:4px; font-size:0.75rem; cursor:pointer;" title="이 대화를 맞춤 번역 규칙으로 AI에 학습">🧠 AI 학습</button>
+        </div>
         <div class="text-main">${h.translated || '...'}</div>
         <div class="text-sub">원문: ${h.original || '...'}</div>
       `;
+
+      el.querySelector('.learn-btn').addEventListener('click', () => {
+        const correctTarget = prompt(`"${h.original}"에 대해 AI가 기억해야 할 올바른 번역을 입력해주세요:`, h.translated);
+        if (correctTarget && correctTarget.trim()) {
+          this.addDictionaryRule(h.original, correctTarget.trim());
+          alert(`✅ AI 학습 완료!\n"${h.original}" ➔ "${correctTarget.trim()}" 규칙이 저장되었습니다. 다음 통역부터 즉시 적용됩니다.`);
+        }
+      });
+
       this.historyList.appendChild(el);
     });
     this.historyList.scrollTop = this.historyList.scrollHeight;

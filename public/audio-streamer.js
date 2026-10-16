@@ -18,7 +18,7 @@ class AudioStreamer {
     this.muteGain = null;
     this.isRecording = false;
 
-    this.chunkSampleSize = 1600; 
+    this.chunkSampleSize = 960; // 60ms ultra-low latency chunk (16kHz)
     this.sampleAccumulator = [];
 
     this.nextPlayTime = 0;
@@ -44,41 +44,74 @@ class AudioStreamer {
   async startRecording(options = { echoCancellation: true }) {
     if (this.isRecording) return;
 
+    // 1. Check MediaDevices & Secure Context
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      const isSecure = window.isSecureContext !== false && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1');
+      const errorMsg = !isSecure
+        ? '마이크는 보안 연결(HTTPS 또는 localhost)에서만 사용할 수 있습니다. 주소를 확인해주세요.'
+        : '이 브라우저는 마이크 입력을 지원하지 않거나 시스템 권한이 제한되어 있습니다.';
+      this.onDebugLog(`[Mic Error] ${errorMsg}`);
+      throw new Error(errorMsg);
+    }
+
     await this.unlockAudio();
     this.sampleAccumulator = [];
 
     try {
-      this.mediaStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          echoCancellation: options.echoCancellation ?? true,
-          noiseSuppression: true,
-          autoGainControl: true
-        }
-      });
+      // 2. Request user media with fallback for bluetooth / external headsets
+      let stream = null;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            channelCount: 1,
+            echoCancellation: options.echoCancellation ?? true,
+            noiseSuppression: true,
+            autoGainControl: true
+          }
+        });
+      } catch (constraintErr) {
+        this.onDebugLog(`[Mic] Strict constraints failed (${constraintErr.name}), retrying with default audio:true...`);
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      }
+      this.mediaStream = stream;
 
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      this.inputAudioContext = new AudioCtx();
+      if (!this.inputAudioContext || this.inputAudioContext.state === 'closed') {
+        this.inputAudioContext = new AudioCtx();
+      }
+
+      this.inputAudioContext.onstatechange = () => {
+        if (this.isRecording && this.inputAudioContext && this.inputAudioContext.state === 'suspended') {
+          this.inputAudioContext.resume().catch(() => {});
+        }
+      };
 
       if (this.inputAudioContext.state === 'suspended') {
         await this.inputAudioContext.resume();
       }
 
       const inputRate = this.inputAudioContext.sampleRate;
-      this.onDebugLog(`[Mic] Hardware SampleRate: ${inputRate}Hz`);
+      this.onDebugLog(`[Mic] Hardware SampleRate: ${inputRate}Hz | Tracks: ${stream.getAudioTracks().length}`);
 
       const source = this.inputAudioContext.createMediaStreamSource(this.mediaStream);
 
+      // ScriptProcessor (2048 samples = ~42ms at 48kHz, ~128ms at 16kHz)
       const bufferSize = 2048;
       this.scriptProcessor = this.inputAudioContext.createScriptProcessor(bufferSize, 1, 1);
+      // Prevent GC from collecting the scriptProcessor
+      window._activeScriptProcessor = this.scriptProcessor;
 
+      // Keep pipeline alive without audible echo (0.00001 prevents WebKit audio graph sleeping)
       this.muteGain = this.inputAudioContext.createGain();
-      this.muteGain.gain.setValueAtTime(0, this.inputAudioContext.currentTime);
+      this.muteGain.gain.setValueAtTime(0.00001, this.inputAudioContext.currentTime);
 
       this.scriptProcessor.onaudioprocess = (event) => {
         if (!this.isRecording) return;
 
         const inputData = event.inputBuffer.getChannelData(0);
+        // Clear output buffer to avoid feedback / echo
+        const outputData = event.outputBuffer.getChannelData(0);
+        outputData.fill(0);
 
         let sum = 0;
         let peak = 0;
@@ -90,11 +123,11 @@ class AudioStreamer {
         const rms = Math.sqrt(sum / inputData.length);
 
         if (this.onInputVolume) {
-          this.onInputVolume(Math.max(rms, peak * 0.5));
+          this.onInputVolume(Math.max(rms, peak * 0.6));
         }
 
         const resampled = this.resampleTo16k(inputData, inputRate);
-        
+
         for (let i = 0; i < resampled.length; i++) {
           this.sampleAccumulator.push(resampled[i]);
         }
@@ -117,9 +150,19 @@ class AudioStreamer {
       this.isRecording = true;
       this.onDebugLog('[Mic] Active & Streaming');
     } catch (err) {
-      this.onDebugLog(`[Mic Error] ${err.message}`);
+      let friendlyMsg = err.message;
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        friendlyMsg = '마이크 사용 권한이 거부되었습니다. 브라우저 주소창 왼쪽의 마이크 아이콘을 눌러 권한을 허용해주세요.';
+      } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+        friendlyMsg = '연결된 마이크 장치를 찾을 수 없습니다. 마이크 연결을 확인해주세요.';
+      } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
+        friendlyMsg = '다른 프로그램(Zoom, 통화 등)에서 마이크를 이미 사용 중이거나 하드웨어 오류가 발생했습니다.';
+      }
+      this.onDebugLog(`[Mic Error] ${friendlyMsg}`);
       console.error('[AudioStreamer] Error starting mic:', err);
-      throw err;
+      const customErr = new Error(friendlyMsg);
+      customErr.original = err;
+      throw customErr;
     }
   }
 
@@ -128,7 +171,9 @@ class AudioStreamer {
 
     if (this.scriptProcessor) {
       this.scriptProcessor.disconnect();
+      this.scriptProcessor.onaudioprocess = null;
       this.scriptProcessor = null;
+      window._activeScriptProcessor = null;
     }
 
     if (this.muteGain) {
@@ -137,13 +182,16 @@ class AudioStreamer {
     }
 
     if (this.mediaStream) {
-      this.mediaStream.getTracks().forEach((track) => track.stop());
+      this.mediaStream.getTracks().forEach((track) => {
+        try { track.stop(); } catch (e) {}
+      });
       this.mediaStream = null;
     }
 
     if (this.inputAudioContext && this.inputAudioContext.state !== 'closed') {
-      this.inputAudioContext.close();
-      this.inputAudioContext = null;
+      try {
+        this.inputAudioContext.suspend();
+      } catch (e) {}
     }
 
     this.sampleAccumulator = [];
@@ -157,12 +205,26 @@ class AudioStreamer {
     const ratio = inputSampleRate / 16000;
     const newLength = Math.round(inputBuffer.length / ratio);
     const result = new Float32Array(newLength);
+
+    // High-quality Hermite cubic interpolation with pre-filtering
     for (let i = 0; i < newLength; i++) {
       const originIndex = i * ratio;
-      const indexFloor = Math.floor(originIndex);
-      const indexCeil = Math.min(inputBuffer.length - 1, Math.ceil(originIndex));
-      const fraction = originIndex - indexFloor;
-      result[i] = inputBuffer[indexFloor] * (1 - fraction) + inputBuffer[indexCeil] * fraction;
+      const index = Math.floor(originIndex);
+      const frac = originIndex - index;
+
+      const p0 = inputBuffer[Math.max(0, index - 1)];
+      const p1 = inputBuffer[index] || 0;
+      const p2 = inputBuffer[Math.min(inputBuffer.length - 1, index + 1)] || 0;
+      const p3 = inputBuffer[Math.min(inputBuffer.length - 1, index + 2)] || 0;
+
+      // Cubic Hermite spline interpolation
+      const c0 = p1;
+      const c1 = 0.5 * (p2 - p0);
+      const c2 = p0 - 2.5 * p1 + 2.0 * p2 - 0.5 * p3;
+      const c3 = 0.5 * (p3 - p0) + 1.5 * (p1 - p2);
+
+      let val = ((c3 * frac + c2) * frac + c1) * frac + c0;
+      result[i] = val;
     }
     return result;
   }
