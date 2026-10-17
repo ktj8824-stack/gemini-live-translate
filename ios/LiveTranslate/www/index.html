@@ -7,9 +7,52 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@300;400;500;600;700;800&family=Outfit:wght@400;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css">
+  <link rel="icon" type="image/png" href="app-icon.png">
+  <link rel="apple-touch-icon" href="app-icon.png">
+  <link rel="stylesheet" href="styles.css?v=1.1.2">
 </head>
 <body class="mode-split">
+  <!-- App Splash & Motion Intro Screen -->
+  <div id="app-splash-screen" class="splash-screen">
+    <canvas id="splash-canvas" class="splash-canvas"></canvas>
+    <video id="splash-video" class="splash-video" playsinline muted preload="auto" style="display: none;"></video>
+
+    <!-- Center Content -->
+    <div class="splash-content">
+      <div class="splash-brand-badge">
+        <div class="splash-logo-glow"></div>
+        <div class="splash-logo-core app-icon-core">
+          <img src="app-icon.png" alt="번역톡 앱 아이콘" class="splash-app-icon">
+        </div>
+      </div>
+      
+      <div class="splash-text-group">
+        <h1 class="splash-title">
+          <span class="gradient-text">Gemini</span>
+          <span class="splash-title-sub">Live Translate</span>
+        </h1>
+        <div class="splash-tagline">
+          <span class="tagline-dot"></span>
+          <span>실시간 양방향 AI 동시통역</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bottom Status Loader (Fixed at true viewport bottom) -->
+    <div class="splash-status-wrap">
+      <div class="splash-loader-bar">
+        <div class="splash-loader-progress"></div>
+      </div>
+      <div id="splash-status-text" class="splash-status-text">통역 신경망 연결 중...</div>
+    </div>
+
+    <!-- Skip Button -->
+    <button id="btn-skip-splash" class="splash-skip-btn" title="바로 시작하기">
+      <span>건너뛰기</span>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+    </button>
+  </div>
+
   <!-- Top Global Header -->
   <header class="app-header">
     <div class="brand">
@@ -285,6 +328,7 @@
 
   <!-- Audio Streamer & App Scripts -->
   <script src="audio-streamer.js?v=1.0.8"></script>
+  <script src="splash.js?v=1.0.0"></script>
   <script src="app.js?v=1.0.8"></script>
 </body>
 </html>
