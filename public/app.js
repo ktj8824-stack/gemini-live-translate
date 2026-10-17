@@ -68,7 +68,8 @@ class LiveTranslatorApp {
     this.pendingTurnTimer = null;
     this.pendingAudioQueue = [];
 
-    this.history = [];
+    this.history = JSON.parse(localStorage.getItem('gemini_chat_history') || '[]');
+    this.currentSessionTurns = [];
     this.currentInputText = '';
     this.currentOutputText = '';
 
@@ -94,6 +95,7 @@ class LiveTranslatorApp {
     this.initElements();
     this.populateLanguageOptions();
     this.renderLearnedRules();
+    this.renderHistory();
     this.updateAiLearnBadge('idle');
     this.updateSpeechModeUI();
     this.bindEvents();
@@ -113,6 +115,7 @@ class LiveTranslatorApp {
     this.btnCloseSettings = document.getElementById('btn-close-settings');
     this.btnCopyHistory = document.getElementById('btn-copy-history');
     this.btnDownloadHistory = document.getElementById('btn-download-history');
+    this.btnClearHistory = document.getElementById('btn-clear-history');
 
     this.splitView = document.getElementById('split-view');
     this.soloView = document.getElementById('solo-view');
@@ -128,6 +131,10 @@ class LiveTranslatorApp {
     this.userOutputText = document.getElementById('user-output-text');
     this.partnerInputText = document.getElementById('partner-input-text');
     this.partnerOutputText = document.getElementById('partner-output-text');
+    this.userChatLog = document.getElementById('user-chat-log');
+    this.partnerChatLog = document.getElementById('partner-chat-log');
+    this.userLiveWrap = document.getElementById('user-live-wrap');
+    this.partnerLiveWrap = document.getElementById('partner-live-wrap');
     this.conversationFeed = document.getElementById('conversation-feed');
     this.historyList = document.getElementById('history-list');
 
@@ -284,6 +291,15 @@ class LiveTranslatorApp {
     this.btnCloseHistory.addEventListener('click', () => this.historyDrawer.classList.remove('open'));
     this.btnCopyHistory.addEventListener('click', () => this.copyHistory());
     this.btnDownloadHistory.addEventListener('click', () => this.downloadHistory());
+    this.btnClearHistory?.addEventListener('click', () => {
+      if (this.history.length === 0) return alert('삭제할 대화 기록이 없습니다.');
+      if (confirm('저장된 대화 히스토리를 모두 삭제하시겠습니까?')) {
+        this.history = [];
+        localStorage.removeItem('gemini_chat_history');
+        this.renderHistory();
+        this.showToast('대화 히스토리가 비워졌습니다.');
+      }
+    });
 
     this.btnSettingsToggle.addEventListener('click', () => this.settingsModal.classList.remove('hidden'));
     this.btnCloseSettings.addEventListener('click', () => this.settingsModal.classList.add('hidden'));
@@ -331,57 +347,55 @@ class LiveTranslatorApp {
   }
 
   clearChatWithHistorySave() {
-    // 1. 현재 화면이나 버퍼에 아직 저장되지 않은 발화가 있다면 히스토리에 먼저 안전하게 저장
+    // 1. 현재 화면이나 버퍼에 아직 처리되지 않은 발화가 있다면 먼저 플러시하여 세션에 포함
     if (this.currentInputText || this.currentOutputText) {
       this.flushCurrentTurnToHistory();
-    } else {
-      // 화면 DOM 텍스트가 기본 안내 문구가 아니고 실제 대화 내용인지 확인
-      const currentUiText = (this.userInputText?.textContent || '').trim();
-      const currentOutText = (this.userOutputText?.textContent || '').trim();
-      const isDefault = currentUiText === '말씀을 시작하세요...' || currentUiText === '' || currentOutText === '번역 결과가 여기에 표시됩니다.';
-      
-      // 히스토리의 가장 최근 항목과 비교하여 중복이 아닐 때만 저장
-      const lastHistory = this.history[this.history.length - 1];
-      const isAlreadySaved = lastHistory && (lastHistory.original === currentUiText || lastHistory.translated === currentOutText);
-      
-      if (!isDefault && !isAlreadySaved && (currentUiText || currentOutText)) {
-        const item = {
-          id: Date.now(),
-          time: new Date().toLocaleTimeString(),
-          original: currentUiText,
-          translated: currentOutText,
-          fromLang: this.userLang,
-          toLang: this.partnerLang
-        };
-        this.history.push(item);
-        this.renderHistory();
-        this.appendFeedBubble(item);
-      }
     }
 
-    // 2. 화면 대화창 텍스트 깨끗하게 초기화
+    // 2. 현재 세션에 대화(currentSessionTurns)가 있었다면 히스토리 저장 확인 및 로컬스토리지 갱신
+    const sessionCount = this.currentSessionTurns.length;
+    if (sessionCount > 0) {
+      this.currentSessionTurns.forEach((turn) => {
+        if (!this.history.some((h) => h.id === turn.id)) {
+          this.history.push(turn);
+        }
+      });
+      localStorage.setItem('gemini_chat_history', JSON.stringify(this.history));
+      this.renderHistory();
+      this.showToast(`💾 대화 ${sessionCount}건이 대화 기록에 안전하게 저장되었습니다.`);
+      this.setStatusPill('✨ 대화 저장 완료 및 새 대화 시작', '#10b981');
+      this.addDebugLog(`[대화 저장] ${sessionCount}건의 대화가 히스토리에 보관되었습니다.`);
+    } else {
+      this.showToast('새 대화창이 준비되었습니다.');
+      this.setStatusPill('대기 중 (새 대화)', '#94a3b8');
+    }
+
+    // 3. 화면 대화창(로그 카드) 깨끗하게 초기화
+    if (this.userChatLog) this.userChatLog.innerHTML = '';
+    if (this.partnerChatLog) this.partnerChatLog.innerHTML = '';
+    this.currentSessionTurns = [];
+
+    // 4. 솔로 피드 모드 초기화
+    if (this.conversationFeed) {
+      this.conversationFeed.innerHTML = `
+        <div class="feed-placeholder">
+          <div class="placeholder-icon">🎙️</div>
+          <h3>실시간 동시통역 준비 완료</h3>
+          <p>마이크 버튼을 누르고 말씀하시면 귓속으로 번역된 음성이 전달되고 실시간 텍스트 피드가 생성됩니다.</p>
+        </div>
+      `;
+    }
+
+    // 5. 실시간 자막 초기 힌트 텍스트 복원
     if (this.userInputText) this.userInputText.textContent = '말씀을 시작하세요...';
     if (this.userOutputText) this.userOutputText.textContent = '번역 결과가 여기에 표시됩니다.';
     if (this.partnerInputText) this.partnerInputText.textContent = 'You speak, and it translates in real time.';
     if (this.partnerOutputText) this.partnerOutputText.textContent = '말씀하시면 실시간으로 번역됩니다.';
 
-    // 3. 내부 버퍼 초기화
+    // 6. 내부 버퍼 초기화
     this.currentInputText = '';
     this.currentOutputText = '';
 
-    // 4. 솔로 피드 모드인 경우 새로운 대화 구분선 추가
-    if (this.conversationFeed) {
-      const sep = document.createElement('div');
-      sep.className = 'feed-session-divider';
-      sep.style.cssText = 'text-align: center; margin: 12px 0; font-size: 0.72rem; color: #00e5ff; opacity: 0.85; border-top: 1px dashed rgba(0, 229, 255, 0.3); padding-top: 6px;';
-      sep.textContent = `✨ 새로운 대화 시작 (${new Date().toLocaleTimeString()})`;
-      this.conversationFeed.appendChild(sep);
-      this.conversationFeed.scrollTop = this.conversationFeed.scrollHeight;
-    }
-
-    // 5. 시각적 피드백
-    this.setStatusPill('✨ 대화 히스토리 저장 완료 (새 대화창)', '#10b981');
-    this.addDebugLog('[새 대화] 이전 대화가 히스토리에 안전하게 저장되고 대화창이 초기화되었습니다.');
     setTimeout(() => {
       if (!this.isStreaming) {
         this.setStatusPill('준비 완료 (마이크 터치)', '#10b981');
@@ -988,12 +1002,20 @@ Do not include markdown code block quotes. Output pure JSON only.`;
 
   renderLiveTranscript() {
     if (this.currentInputText) {
-      this.userInputText.textContent = this.currentInputText;
-      this.partnerInputText.textContent = this.currentInputText;
+      if (this.userInputText) this.userInputText.textContent = this.currentInputText;
+      if (this.partnerInputText) this.partnerInputText.textContent = this.currentInputText;
     }
     if (this.currentOutputText) {
-      this.userOutputText.textContent = this.currentOutputText;
-      this.partnerOutputText.textContent = this.currentOutputText;
+      if (this.userOutputText) this.userOutputText.textContent = this.currentOutputText;
+      if (this.partnerOutputText) this.partnerOutputText.textContent = this.currentOutputText;
+    }
+    if (this.userChatLog) {
+      const p = this.userChatLog.closest('.transcript-display');
+      if (p) p.scrollTop = p.scrollHeight;
+    }
+    if (this.partnerChatLog) {
+      const p = this.partnerChatLog.closest('.transcript-display');
+      if (p) p.scrollTop = p.scrollHeight;
     }
   }
 
@@ -1002,7 +1024,7 @@ Do not include markdown code block quotes. Output pure JSON only.`;
 
     const item = {
       id: Date.now(),
-      time: new Date().toLocaleTimeString(),
+      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
       original: this.currentInputText.trim(),
       translated: this.currentOutputText.trim(),
       fromLang: this.userLang,
@@ -1010,13 +1032,90 @@ Do not include markdown code block quotes. Output pure JSON only.`;
     };
 
     if (item.original || item.translated) {
-      this.history.push(item);
-      this.renderHistory();
+      // 1. 화면에 대화 카드 추가 (화면에 대화가 계속 유지됨)
+      this.currentSessionTurns.push(item);
+      this.appendTurnToChatLog(item);
       this.appendFeedBubble(item);
+
+      // 2. 대화 기록 저장소에도 자동 보관
+      this.history.push(item);
+      localStorage.setItem('gemini_chat_history', JSON.stringify(this.history));
+      this.renderHistory();
     }
 
     this.currentInputText = '';
     this.currentOutputText = '';
+
+    // 실시간 자막 비우기 (대화 카드는 화면에 계속 유지되고, 자막 공간만 다음 발화를 위해 정리)
+    if (this.userInputText) this.userInputText.textContent = '';
+    if (this.userOutputText) this.userOutputText.textContent = '';
+    if (this.partnerInputText) this.partnerInputText.textContent = '';
+    if (this.partnerOutputText) this.partnerOutputText.textContent = '';
+  }
+
+  appendTurnToChatLog(item) {
+    if (!item.original && !item.translated) return;
+
+    const transText = item.translated || item.original;
+    const origText = item.original || '';
+
+    // 1. User View 대화 카드 (나의 화면에 누적)
+    if (this.userChatLog) {
+      const userCard = document.createElement('div');
+      userCard.className = 'chat-turn-card';
+      userCard.innerHTML = `
+        <div class="card-header">
+          <span>${item.time}</span>
+          <span style="color:var(--accent-cyan); font-weight:700;">${item.fromLang} ➔ ${item.toLang}</span>
+        </div>
+        <div class="card-trans">${this.escapeHtml(transText)}</div>
+        ${origText && origText !== transText ? `<div class="card-orig">원문: ${this.escapeHtml(origText)}</div>` : ''}
+      `;
+      this.userChatLog.appendChild(userCard);
+
+      const parent = this.userChatLog.closest('.transcript-display');
+      if (parent) {
+        requestAnimationFrame(() => {
+          parent.scrollTop = parent.scrollHeight;
+        });
+      }
+    }
+
+    // 2. Partner View 대화 카드 (상대방 화면에 누적: 180도 회전 구역)
+    if (this.partnerChatLog) {
+      const partnerCard = document.createElement('div');
+      partnerCard.className = 'chat-turn-card partner-card';
+      partnerCard.innerHTML = `
+        <div class="card-header">
+          <span>${item.time}</span>
+          <span style="color:#a78bfa; font-weight:700;">${item.fromLang} ➔ ${item.toLang}</span>
+        </div>
+        <div class="card-trans">${this.escapeHtml(transText)}</div>
+        ${origText && origText !== transText ? `<div class="card-orig">Original: ${this.escapeHtml(origText)}</div>` : ''}
+      `;
+      this.partnerChatLog.appendChild(partnerCard);
+
+      const parent = this.partnerChatLog.closest('.transcript-display');
+      if (parent) {
+        requestAnimationFrame(() => {
+          parent.scrollTop = parent.scrollHeight;
+        });
+      }
+    }
+  }
+
+  escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  showToast(msg) {
+    this.showAutoLearnToast(msg);
   }
 
   appendFeedBubble(item) {

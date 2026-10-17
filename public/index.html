@@ -72,7 +72,8 @@
         </div>
 
         <div class="transcript-display partner-transcript">
-          <div class="subtitle-wrapper">
+          <div id="partner-chat-log" class="chat-stream-log"></div>
+          <div id="partner-live-wrap" class="subtitle-wrapper live-bubble">
             <p id="partner-output-text" class="live-text highlight">말씀하시면 실시간으로 번역됩니다.</p>
             <p id="partner-input-text" class="live-original-text">You speak, and it translates in real time.</p>
           </div>
@@ -133,7 +134,8 @@
         </div>
 
         <div class="transcript-display user-transcript">
-          <div class="subtitle-wrapper">
+          <div id="user-chat-log" class="chat-stream-log"></div>
+          <div id="user-live-wrap" class="subtitle-wrapper live-bubble">
             <p id="user-input-text" class="live-original-text">말씀을 시작하세요...</p>
             <p id="user-output-text" class="live-text highlight">번역 결과가 여기에 표시됩니다.</p>
           </div>
@@ -199,6 +201,7 @@
       <p class="empty-history">아직 기록된 대화가 없습니다.</p>
     </div>
     <div class="drawer-footer">
+      <button id="btn-clear-history" class="secondary-btn" style="color: #f43f5e; border-color: rgba(244, 63, 94, 0.4);">기록 비우기</button>
       <button id="btn-copy-history" class="secondary-btn">전체 복사</button>
       <button id="btn-download-history" class="primary-btn">텍스트 저장(.txt)</button>
     </div>
