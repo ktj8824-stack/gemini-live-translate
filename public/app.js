@@ -913,11 +913,26 @@ Do not include markdown code block quotes. Output pure JSON only.`;
         const reason = ev.reason || '';
         this.addDebugLog(`[WebSocket Closed] Code: ${ev.code}, Reason: ${reason || 'None'}`);
         
+        // 1. Google 10분 세션 최대 지속시간 만료 (GoAway 정상 세션 회전 - 오류 아님!)
+        const isSessionLimit = reason.includes('GoAway') || reason.includes('session duration') || reason.includes('duration limit');
+        if (isSessionLimit) {
+          this.addDebugLog('[Gemini] Google 10분 세션 지속 제한에 도달하여 자동 갱신되었습니다. (정상 동작)');
+          this.stopStreaming();
+          this.setStatusPill('세션 갱신 완료 (준비)', '#10b981');
+          if (this.speechMode === 'handsfree') {
+            // 자동 감지(핸즈프리) 모드인 경우 사용자가 끊김을 느끼지 않게 바로 새 세션 재연결
+            setTimeout(() => this.startStreaming(), 300);
+          } else {
+            this.updatePttIdleUI();
+          }
+          return;
+        }
+
         let alertMessage = null;
         if (ev.code === 1011 || reason.includes('prepayment credits are depleted') || reason.includes('credits')) {
           this.setStatusPill('API 크레딧 소진', '#f43f5e');
           alertMessage = '⚠️ 구글 Gemini API 키의 크레딧/한도가 소진되었습니다.\n\n새로운 Gemini API 키를 발급받으신 후 상단 설정(⚙️) 아이콘을 눌러 새 키를 입력해 주세요.';
-        } else if (ev.code === 1006 || ev.code === 1007 || ev.code === 1008) {
+        } else if ((ev.code === 1006 || ev.code === 1007 || ev.code === 1008) && !reason.includes('normal')) {
           this.setStatusPill('API 인증 실패', '#f43f5e');
           alertMessage = `⚠️ Gemini API 연결 실패 (코드 ${ev.code})\n\nAPI 키가 올바른지 확인하거나 새로운 키로 변경해 주세요.\n사유: ${reason || '인증/네트워크 오류'}`;
         } else if (ev.code !== 1000) {
@@ -999,6 +1014,11 @@ Do not include markdown code block quotes. Output pure JSON only.`;
     if (data.setupComplete || data.setup_complete) {
       this.addDebugLog('[Gemini] Setup Complete! Ready for speech.');
       this.setStatusPill('통역 준비 완료 (말씀하세요)', '#10b981');
+      return;
+    }
+
+    if (data.goAway || data.go_away) {
+      this.addDebugLog('[Gemini] 10분 세션 교체 신호(GoAway) 수신');
       return;
     }
 
