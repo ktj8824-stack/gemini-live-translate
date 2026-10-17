@@ -111,6 +111,12 @@
           <span id="stream-status-label" class="status-label">터치하여 동시통역 시작</span>
           <span id="ptt-hint-label" class="ptt-hint hidden">💡 버튼을 누른 채로 말하고 손을 떼세요 (Space 키 가능)</span>
         </div>
+
+        <div class="quick-clear-wrap">
+          <button id="btn-clear-chat" class="icon-btn clear-btn" title="대화창 비우고 새 대화 시작 (대화 히스토리에 자동 보관)">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5"/></svg>
+          </button>
+        </div>
       </div>
 
       <!-- Bottom Zone (내 영역: 정방향 표시) -->
@@ -149,6 +155,9 @@
             <button id="btn-solo-swap" class="icon-btn-compact">⇄</button>
             <select id="solo-target-lang" class="lang-select-compact"></select>
           </div>
+          <button id="btn-solo-clear" class="icon-btn-compact" title="대화창 비우고 새 대화 시작 (대화 히스토리에 자동 보관)" style="padding: 4px 10px; font-size: 0.75rem; border-radius: 8px; background: rgba(255,255,255,0.08); color: var(--text-secondary); border: 1px solid var(--border-color); cursor: pointer; display: flex; align-items: center; gap: 4px;">
+            <span>↺ 새 대화</span>
+          </button>
           <div class="earphone-status">
             <span class="earphone-icon">🎧</span>
             <span>초저지연 오디오 스트리밍 준비 완료</span>

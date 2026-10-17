@@ -432,6 +432,27 @@ body {
   border-color: var(--accent-cyan);
 }
 
+.quick-clear-wrap {
+  position: absolute;
+  right: 1.5rem;
+}
+
+.clear-btn {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 50%;
+  width: 42px;
+  height: 42px;
+  color: var(--text-secondary);
+  transition: all 0.25s ease;
+}
+
+.clear-btn:hover {
+  background: rgba(0, 229, 255, 0.15);
+  color: var(--accent-cyan);
+  border-color: var(--accent-cyan);
+  transform: rotate(-45deg);
+}
+
 .main-action-wrap {
   display: flex;
   flex-direction: column;

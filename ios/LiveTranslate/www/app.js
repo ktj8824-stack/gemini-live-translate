@@ -164,6 +164,10 @@ class LiveTranslatorApp {
     if (this.settingSmartGuard) {
       this.settingSmartGuard.checked = this.smartGuard;
     }
+
+    // New Conversation (Clear Chat) buttons
+    this.btnClearChat = document.getElementById('btn-clear-chat');
+    this.btnSoloClear = document.getElementById('btn-solo-clear');
   }
 
   populateLanguageOptions() {
@@ -188,6 +192,10 @@ class LiveTranslatorApp {
   bindEvents() {
     this.btnModeSplit.addEventListener('click', () => this.setMode('split'));
     this.btnModeSolo.addEventListener('click', () => this.setMode('solo'));
+
+    // Clear Chat / New Conversation buttons
+    this.btnClearChat?.addEventListener('click', () => this.clearChatWithHistorySave());
+    this.btnSoloClear?.addEventListener('click', () => this.clearChatWithHistorySave());
 
     // Speech Mode switches (Handsfree vs PTT)
     this.btnModeHandsfree?.addEventListener('click', () => this.setSpeechMode('handsfree'));
@@ -316,6 +324,67 @@ class LiveTranslatorApp {
     this.dictTargetInput?.addEventListener('keypress', (e) => {
       if (e.key === 'Enter') this.addDictionaryRule();
     });
+  }
+
+  clearChatWithHistorySave() {
+    // 1. 현재 화면이나 버퍼에 아직 저장되지 않은 발화가 있다면 히스토리에 먼저 안전하게 저장
+    if (this.currentInputText || this.currentOutputText) {
+      this.flushCurrentTurnToHistory();
+    } else {
+      // 화면 DOM 텍스트가 기본 안내 문구가 아니고 실제 대화 내용인지 확인
+      const currentUiText = (this.userInputText?.textContent || '').trim();
+      const currentOutText = (this.userOutputText?.textContent || '').trim();
+      const isDefault = currentUiText === '말씀을 시작하세요...' || currentUiText === '' || currentOutText === '번역 결과가 여기에 표시됩니다.';
+      
+      // 히스토리의 가장 최근 항목과 비교하여 중복이 아닐 때만 저장
+      const lastHistory = this.history[this.history.length - 1];
+      const isAlreadySaved = lastHistory && (lastHistory.original === currentUiText || lastHistory.translated === currentOutText);
+      
+      if (!isDefault && !isAlreadySaved && (currentUiText || currentOutText)) {
+        const item = {
+          id: Date.now(),
+          time: new Date().toLocaleTimeString(),
+          original: currentUiText,
+          translated: currentOutText,
+          fromLang: this.userLang,
+          toLang: this.partnerLang
+        };
+        this.history.push(item);
+        this.renderHistory();
+        this.appendFeedBubble(item);
+      }
+    }
+
+    // 2. 화면 대화창 텍스트 깨끗하게 초기화
+    if (this.userInputText) this.userInputText.textContent = '말씀을 시작하세요...';
+    if (this.userOutputText) this.userOutputText.textContent = '번역 결과가 여기에 표시됩니다.';
+    if (this.partnerInputText) this.partnerInputText.textContent = 'You speak, and it translates in real time.';
+    if (this.partnerOutputText) this.partnerOutputText.textContent = '말씀하시면 실시간으로 번역됩니다.';
+
+    // 3. 내부 버퍼 초기화
+    this.currentInputText = '';
+    this.currentOutputText = '';
+
+    // 4. 솔로 피드 모드인 경우 새로운 대화 구분선 추가
+    if (this.conversationFeed) {
+      const sep = document.createElement('div');
+      sep.className = 'feed-session-divider';
+      sep.style.cssText = 'text-align: center; margin: 12px 0; font-size: 0.72rem; color: #00e5ff; opacity: 0.85; border-top: 1px dashed rgba(0, 229, 255, 0.3); padding-top: 6px;';
+      sep.textContent = `✨ 새로운 대화 시작 (${new Date().toLocaleTimeString()})`;
+      this.conversationFeed.appendChild(sep);
+      this.conversationFeed.scrollTop = this.conversationFeed.scrollHeight;
+    }
+
+    // 5. 시각적 피드백
+    this.setStatusPill('✨ 대화 히스토리 저장 완료 (새 대화창)', '#10b981');
+    this.addDebugLog('[새 대화] 이전 대화가 히스토리에 안전하게 저장되고 대화창이 초기화되었습니다.');
+    setTimeout(() => {
+      if (!this.isStreaming) {
+        this.setStatusPill('준비 완료 (마이크 터치)', '#10b981');
+      } else {
+        this.setStatusPill('통역 중 (듣는 중)', '#10b981');
+      }
+    }, 2000);
   }
 
   setSpeechMode(mode) {
