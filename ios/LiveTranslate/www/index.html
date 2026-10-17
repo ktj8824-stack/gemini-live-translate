@@ -92,6 +92,14 @@
         </div>
 
         <div class="main-action-wrap">
+          <div class="speech-mode-selector">
+            <button id="btn-mode-handsfree" class="speech-mode-btn active" title="말을 쉬어도 대기 후 자동 통역 (일상 대화)">
+              <span>🎙️ 자동 감지</span>
+            </button>
+            <button id="btn-mode-ptt" class="speech-mode-btn" title="버튼을 누르고 있는 동안 말하고 떼면 통역 (긴 문장/발표)">
+              <span>🔘 누르고 말하기 (PTT)</span>
+            </button>
+          </div>
           <button id="btn-toggle-stream" class="mic-button idle">
             <div class="mic-inner">
               <svg id="mic-icon" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
@@ -101,6 +109,7 @@
             <div class="pulse-ring-2"></div>
           </button>
           <span id="stream-status-label" class="status-label">터치하여 동시통역 시작</span>
+          <span id="ptt-hint-label" class="ptt-hint hidden">💡 버튼을 누른 채로 말하고 손을 떼세요 (Space 키 가능)</span>
         </div>
       </div>
 
@@ -209,6 +218,30 @@
           </div>
           <label class="switch">
             <input type="checkbox" id="setting-echo-toggle">
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
+            <strong>발화 멈춤 대기 시간 (Pause Tolerance)</strong>
+            <p>말 중간에 숨을 고르거나 생각할 때 조기 통역을 방지하기 위해 기다리는 시간</p>
+          </div>
+          <select id="setting-pause-tolerance" class="lang-select-compact" style="background: rgba(15, 23, 42, 0.8);">
+            <option value="800">빠름 (0.8초 - 짧은 대화)</option>
+            <option value="1500">보통 (1.5초 - 일상 대화)</option>
+            <option value="2000" selected>여유 있게 (2.0초 - 추천/긴 문장)</option>
+            <option value="3000">매우 여유 (3.0초 - 생각하며 말하기)</option>
+          </select>
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
+            <strong>스마트 긴 문장 보호 (Smart Sentence Guard)</strong>
+            <p>내가 아직 말하고 있는 도중에는 번역 오디오가 끼어들지 않고 발화 종료 후 재생</p>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="setting-smart-guard" checked>
             <span class="slider"></span>
           </label>
         </div>

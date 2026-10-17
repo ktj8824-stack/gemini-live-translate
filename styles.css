@@ -403,7 +403,7 @@ body {
 
 /* Center Divider Bar */
 .center-divider {
-  height: 72px;
+  min-height: 88px;
   position: relative;
   display: flex;
   align-items: center;
@@ -411,6 +411,7 @@ body {
   background: rgba(10, 13, 20, 0.95);
   border-top: 1px solid var(--border-color);
   border-bottom: 1px solid var(--border-color);
+  padding: 0.35rem 0;
   z-index: 10;
 }
 
@@ -435,14 +436,60 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0.25rem;
+  gap: 0.3rem;
+}
+
+/* Speech Mode Selector (Handsfree vs PTT) */
+.speech-mode-selector {
+  display: flex;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 2px;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  gap: 2px;
+  margin-bottom: 2px;
+}
+
+.speech-mode-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 0.2rem 0.65rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  border-radius: 16px;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.speech-mode-btn:hover {
+  color: #fff;
+}
+
+.speech-mode-btn.active {
+  background: linear-gradient(135deg, rgba(0, 229, 255, 0.25), rgba(139, 92, 246, 0.35));
+  color: #fff;
+  border: 1px solid rgba(0, 229, 255, 0.4);
+  box-shadow: 0 0 10px rgba(0, 229, 255, 0.25);
+}
+
+.ptt-hint {
+  font-size: 0.7rem;
+  color: var(--accent-cyan);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  animation: fadeIn 0.3s ease;
 }
 
 /* Mic Button with Ripples */
 .mic-button {
   position: relative;
-  width: 58px;
-  height: 58px;
+  width: 56px;
+  height: 56px;
   border-radius: 50%;
   border: none;
   cursor: pointer;
@@ -453,7 +500,11 @@ body {
   align-items: center;
   justify-content: center;
   box-shadow: 0 4px 20px rgba(59, 130, 246, 0.5);
-  transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  transition: all 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  touch-action: manipulation;
 }
 
 .mic-button:hover {
@@ -463,6 +514,18 @@ body {
 .mic-button.streaming {
   background: linear-gradient(135deg, #ef4444 0%, #f43f5e 100%);
   box-shadow: 0 4px 25px rgba(244, 63, 94, 0.6);
+}
+
+/* PTT Active (Holding down) */
+.mic-button.ptt-active {
+  background: linear-gradient(135deg, #10b981 0%, #06b6d4 100%) !important;
+  box-shadow: 0 0 30px rgba(6, 182, 212, 0.9), 0 0 10px rgba(16, 185, 129, 0.8) !important;
+  transform: scale(1.15) !important;
+}
+
+.mic-button.ptt-mode.idle {
+  background: linear-gradient(135deg, #0284c7 0%, #6366f1 100%);
+  border: 2px dashed rgba(255, 255, 255, 0.4);
 }
 
 .mic-inner {

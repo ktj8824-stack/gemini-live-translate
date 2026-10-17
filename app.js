@@ -58,6 +58,16 @@ class LiveTranslatorApp {
       echoCancellation: true
     };
 
+    // Speech & Turn Management (Pause tolerance & Push-to-Talk)
+    this.speechMode = localStorage.getItem('gemini_speech_mode') || 'handsfree'; // 'handsfree' | 'ptt'
+    this.pauseTolerance = parseInt(localStorage.getItem('gemini_pause_tolerance') || '2000', 10);
+    this.smartGuard = localStorage.getItem('gemini_smart_guard') !== 'false';
+    this.isPttHolding = false;
+    this.lastSpeechTime = 0;
+    this.isUserSpeaking = false;
+    this.pendingTurnTimer = null;
+    this.pendingAudioQueue = [];
+
     this.history = [];
     this.currentInputText = '';
     this.currentOutputText = '';
@@ -67,6 +77,7 @@ class LiveTranslatorApp {
       onInputVolume: (vol) => {
         this.drawWaveform('user-wave', vol, '#00e5ff');
         this.updateVolumeBar(vol);
+        this.handleVoiceVolume(vol);
       },
       onOutputVolume: (vol) => this.drawWaveform('partner-wave', vol, '#8b5cf6'),
       onDebugLog: (msg) => this.addDebugLog(msg)
@@ -80,6 +91,7 @@ class LiveTranslatorApp {
     this.populateLanguageOptions();
     this.renderLearnedRules();
     this.updateAiLearnBadge('idle');
+    this.updateSpeechModeUI();
     this.bindEvents();
     this.checkApiKey();
   }
@@ -139,6 +151,19 @@ class LiveTranslatorApp {
     }
     this.settingAudioOut = document.getElementById('setting-audio-out');
     this.settingEchoCancellation = document.getElementById('setting-echo-cancellation');
+
+    // Speech mode controls
+    this.btnModeHandsfree = document.getElementById('btn-mode-handsfree');
+    this.btnModePtt = document.getElementById('btn-mode-ptt');
+    this.pttHintLabel = document.getElementById('ptt-hint-label');
+    this.settingPauseTolerance = document.getElementById('setting-pause-tolerance');
+    if (this.settingPauseTolerance) {
+      this.settingPauseTolerance.value = String(this.pauseTolerance);
+    }
+    this.settingSmartGuard = document.getElementById('setting-smart-guard');
+    if (this.settingSmartGuard) {
+      this.settingSmartGuard.checked = this.smartGuard;
+    }
   }
 
   populateLanguageOptions() {
@@ -164,8 +189,57 @@ class LiveTranslatorApp {
     this.btnModeSplit.addEventListener('click', () => this.setMode('split'));
     this.btnModeSolo.addEventListener('click', () => this.setMode('solo'));
 
-    this.btnToggleStream.addEventListener('click', () => this.toggleStreaming());
-    this.btnSoloMic.addEventListener('click', () => this.toggleStreaming());
+    // Speech Mode switches (Handsfree vs PTT)
+    this.btnModeHandsfree?.addEventListener('click', () => this.setSpeechMode('handsfree'));
+    this.btnModePtt?.addEventListener('click', () => this.setSpeechMode('ptt'));
+
+    // Main mic button interaction
+    this.btnToggleStream.addEventListener('click', (e) => {
+      if (this.speechMode === 'handsfree') {
+        this.toggleStreaming();
+      }
+    });
+
+    this.btnSoloMic.addEventListener('click', (e) => {
+      if (this.speechMode === 'handsfree') {
+        this.toggleStreaming();
+      }
+    });
+
+    // PTT Pointer & Touch Events
+    const attachPttListeners = (el) => {
+      if (!el) return;
+      el.addEventListener('pointerdown', (e) => this.handlePttDown(e));
+      el.addEventListener('pointerup', (e) => this.handlePttUp(e));
+      el.addEventListener('pointercancel', (e) => this.handlePttUp(e));
+      el.addEventListener('mouseleave', (e) => {
+        if (this.speechMode === 'ptt' && this.isPttHolding) this.handlePttUp(e);
+      });
+      el.addEventListener('contextmenu', (e) => {
+        if (this.speechMode === 'ptt') e.preventDefault();
+      });
+    };
+    attachPttListeners(this.btnToggleStream);
+    attachPttListeners(this.btnSoloMic);
+
+    // Keyboard Spacebar PTT shortcut
+    window.addEventListener('keydown', (e) => {
+      if (e.code === 'Space' && !['INPUT', 'TEXTAREA'].includes(e.target.tagName)) {
+        if (this.speechMode === 'ptt' && !this.isPttHolding) {
+          e.preventDefault();
+          this.handlePttDown(e);
+        }
+      }
+    });
+
+    window.addEventListener('keyup', (e) => {
+      if (e.code === 'Space' && !['INPUT', 'TEXTAREA'].includes(e.target.tagName)) {
+        if (this.speechMode === 'ptt' && this.isPttHolding) {
+          e.preventDefault();
+          this.handlePttUp(e);
+        }
+      }
+    });
 
     this.btnSwapLang.addEventListener('click', () => this.swapLanguages());
     this.btnSoloSwap.addEventListener('click', () => this.swapLanguages());
@@ -216,6 +290,19 @@ class LiveTranslatorApp {
       });
     }
 
+    // Pause Tolerance & Smart Guard listeners
+    this.settingPauseTolerance?.addEventListener('change', (e) => {
+      this.pauseTolerance = parseInt(e.target.value, 10);
+      localStorage.setItem('gemini_pause_tolerance', String(this.pauseTolerance));
+      this.addDebugLog(`[Settings] 발화 멈춤 대기 시간 설정: ${this.pauseTolerance}ms`);
+    });
+
+    this.settingSmartGuard?.addEventListener('change', (e) => {
+      this.smartGuard = e.target.checked;
+      localStorage.setItem('gemini_smart_guard', String(this.smartGuard));
+      this.addDebugLog(`[Settings] 스마트 긴 문장 보호: ${this.smartGuard ? 'ON' : 'OFF'}`);
+    });
+
     this.settingEchoToggle.addEventListener('change', (e) => {
       this.settings.echoTargetLanguage = e.target.checked;
       this.onLanguageChange();
@@ -229,6 +316,116 @@ class LiveTranslatorApp {
     this.dictTargetInput?.addEventListener('keypress', (e) => {
       if (e.key === 'Enter') this.addDictionaryRule();
     });
+  }
+
+  setSpeechMode(mode) {
+    this.speechMode = mode;
+    localStorage.setItem('gemini_speech_mode', mode);
+    this.updateSpeechModeUI();
+    this.addDebugLog(`[Mode] 발화 방식 변경: ${mode === 'ptt' ? '누르고 말하기 (PTT)' : '자동 감지 (핸즈프리)'}`);
+  }
+
+  updateSpeechModeUI() {
+    if (this.btnModeHandsfree && this.btnModePtt) {
+      if (this.speechMode === 'ptt') {
+        this.btnModePtt.classList.add('active');
+        this.btnModeHandsfree.classList.remove('active');
+        if (this.pttHintLabel) this.pttHintLabel.classList.remove('hidden');
+        this.btnToggleStream?.classList.add('ptt-mode');
+        this.btnSoloMic?.classList.add('ptt-mode');
+        if (!this.isStreaming) {
+          this.streamStatusLabel.textContent = '버튼을 누르고 있는 동안 말씀하세요 (Space 키 가능)';
+          this.soloMicText.textContent = '누르고 말하기';
+        }
+      } else {
+        this.btnModeHandsfree.classList.add('active');
+        this.btnModePtt.classList.remove('active');
+        if (this.pttHintLabel) this.pttHintLabel.classList.add('hidden');
+        this.btnToggleStream?.classList.remove('ptt-mode');
+        this.btnSoloMic?.classList.remove('ptt-mode');
+        if (!this.isStreaming) {
+          this.streamStatusLabel.textContent = '터치하여 실시간 동시통역 시작 (중간 호흡 대기)';
+          this.soloMicText.textContent = '통역 시작';
+        }
+      }
+    }
+  }
+
+  async handlePttDown(e) {
+    if (this.speechMode !== 'ptt') return;
+    if (e && e.cancelable && e.type !== 'keydown') e.preventDefault();
+    if (this.isPttHolding) return;
+
+    this.isPttHolding = true;
+    this.lastSpeechTime = Date.now();
+    this.isUserSpeaking = true;
+    if (this.pendingTurnTimer) {
+      clearTimeout(this.pendingTurnTimer);
+      this.pendingTurnTimer = null;
+    }
+
+    this.btnToggleStream.classList.add('ptt-active');
+    this.btnSoloMic.classList.add('ptt-active');
+    this.streamStatusLabel.textContent = '🎙️ 말씀하세요... (듣는 중)';
+    this.soloMicText.textContent = '말씀하시는 중...';
+    this.setStatusPill('음성 입력 중...', '#10b981');
+
+    if (!this.isStreaming) {
+      await this.startStreaming();
+    }
+  }
+
+  handlePttUp(e) {
+    if (this.speechMode !== 'ptt' || !this.isPttHolding) return;
+    if (e && e.cancelable && e.type !== 'keyup') e.preventDefault();
+
+    this.isPttHolding = false;
+    this.isUserSpeaking = false;
+    this.btnToggleStream.classList.remove('ptt-active');
+    this.btnSoloMic.classList.remove('ptt-active');
+    this.streamStatusLabel.textContent = '⚡ 번역 처리 및 출력 중...';
+    this.soloMicText.textContent = '번역 처리 중...';
+    this.setStatusPill('번역 출력 중...', '#00e5ff');
+
+    setTimeout(() => {
+      this.flushCurrentTurnToHistory();
+      this.playPendingAudioQueue();
+      if (this.speechMode === 'ptt' && !this.isPttHolding) {
+        this.streamStatusLabel.textContent = '버튼을 누르고 있는 동안 말씀하세요 (Space 키 가능)';
+        this.soloMicText.textContent = '누르고 말하기';
+        this.setStatusPill('대기 중 (누르고 말하기)', '#10b981');
+      }
+    }, 350);
+  }
+
+  handleVoiceVolume(vol) {
+    // Ultra-sensitive threshold (0.006) to catch distant partner speech
+    if (vol > 0.006) {
+      this.lastSpeechTime = Date.now();
+      this.isUserSpeaking = true;
+      if (this.pendingTurnTimer) {
+        clearTimeout(this.pendingTurnTimer);
+        this.pendingTurnTimer = null;
+      }
+    }
+  }
+
+  shouldHoldAudioPlayback() {
+    // ONLY hold audio when user is actively holding down the PTT button!
+    // In handsfree/auto mode, stream audio chunks in real-time immediately to prevent audio buffer truncation
+    if (this.speechMode === 'ptt' && this.isPttHolding) {
+      return true;
+    }
+    return false;
+  }
+
+  playPendingAudioQueue() {
+    if (!this.settings.audioOutputEnabled || this.pendingAudioQueue.length === 0) return;
+    this.addDebugLog(`[오디오 재생] 보류된 청크 ${this.pendingAudioQueue.length}개 재생`);
+    while (this.pendingAudioQueue.length > 0) {
+      const chunk = this.pendingAudioQueue.shift();
+      this.audioStreamer.playChunk(chunk);
+    }
   }
 
   addDictionaryRule(sourceVal = null, targetVal = null) {
@@ -518,15 +715,11 @@ Do not include markdown code block quotes. Output pure JSON only.`;
         const srcName = srcLangObj ? srcLangObj.name : this.userLang;
         const tgtName = tgtLangObj ? tgtLangObj.name : this.partnerLang;
 
-        const systemPrompt = `You are an elite simultaneous interpreter providing live translation.
-Source Language: ${srcName} (${this.userLang})
-Target Language: ${tgtName} (${this.partnerLang})
-
-CRITICAL MANDATES:
-1. Translate everything you hear in ${srcName} into fluent, natural ${tgtName} immediately.
-2. Output BOTH realtime translated text and realtime spoken audio in ${tgtName}.
-3. STRICT PROHIBITION: NEVER chat, never say greetings, never explain, never summarize, never ask questions, and never say filler like "Here is the translation:".
-4. Output EXCLUSIVELY the translated content. If the speaker says something, translate it verbatim into ${tgtName}.`;
+        let customGlossary = '';
+        if (this.learnedRules && this.learnedRules.length > 0) {
+          const topRules = this.learnedRules.slice(0, 8);
+          customGlossary = `\nCustom Glossary & Key Terms:\n` + topRules.map(r => `- "${r.src}" -> "${r.tgt}"`).join('\n');
+        }
 
         const setupMessage = {
           setup: {
@@ -542,9 +735,11 @@ CRITICAL MANDATES:
         };
 
         this.ws.send(JSON.stringify(setupMessage));
-        this.addDebugLog(`[Setup Sent] ${this.userLang} -> ${this.partnerLang} (Interpreter Mode)`);
+        this.addDebugLog(`[Setup Sent] ${this.userLang} -> ${this.partnerLang} (Ultra Low Latency Native)`);
         this.setStatusPill('통역 중 (듣는 중)', '#10b981');
-        this.streamStatusLabel.textContent = '음성을 듣고 실시간 통역 중입니다... (말씀하세요)';
+        this.streamStatusLabel.textContent = this.speechMode === 'ptt'
+          ? '버튼을 누르고 있는 동안 말씀하세요 (Space 키 가능)'
+          : '음성을 듣고 실시간 통역 중입니다... (말씀하세요)';
       };
 
       this.ws.onmessage = async (event) => {
@@ -656,10 +851,16 @@ CRITICAL MANDATES:
     const serverContent = data.serverContent || data.server_content || data.payload?.serverContent;
     if (!serverContent) return;
 
-    // 1. Input Transcript (User STT)
+    // 1. Input Transcript (User / Partner STT)
     const inTrans = serverContent.inputTranscription || serverContent.input_transcription;
     if (inTrans && inTrans.text) {
       this.currentInputText += inTrans.text;
+      this.lastSpeechTime = Date.now();
+      this.isUserSpeaking = true;
+      if (this.pendingTurnTimer) {
+        clearTimeout(this.pendingTurnTimer);
+        this.pendingTurnTimer = null;
+      }
       this.addDebugLog(`[STT 원문] ${inTrans.text}`);
       this.renderLiveTranscript();
     }
@@ -687,14 +888,23 @@ CRITICAL MANDATES:
           this.updateStatsBar();
           this.addDebugLog(`[오디오 수신] chunk #${this.chunksReceived}`);
           if (this.settings.audioOutputEnabled) {
-            this.audioStreamer.playChunk(inlineData.data);
+            if (this.speechMode === 'ptt' && this.isPttHolding) {
+              this.pendingAudioQueue.push(inlineData.data);
+              this.addDebugLog('[오디오 보류] PTT 누름 상태');
+            } else {
+              this.audioStreamer.playChunk(inlineData.data);
+            }
           }
         }
       }
     }
 
     if (serverContent.turnComplete || serverContent.turn_complete) {
-      this.flushCurrentTurnToHistory();
+      if (this.speechMode === 'ptt' && this.isPttHolding) {
+        this.addDebugLog('[Turn Complete] PTT 입력 중 -> 대기');
+      } else {
+        this.flushCurrentTurnToHistory();
+      }
     }
   }
 
@@ -826,6 +1036,7 @@ CRITICAL MANDATES:
 
   updateVolumeBar(volume) {
     if (this.isStreaming) {
+      if (this.speechMode === 'ptt' && !this.isPttHolding) return;
       const pct = Math.min(100, Math.round(volume * 400));
       this.streamStatusLabel.textContent = `🎙️ 마이크 감지 중 (레벨: ${pct}%) | 송신: ${this.chunksSent} / 수신: ${this.chunksReceived}`;
     }
@@ -833,6 +1044,7 @@ CRITICAL MANDATES:
 
   updateStatsBar() {
     if (this.isStreaming) {
+      if (this.speechMode === 'ptt' && !this.isPttHolding) return;
       this.streamStatusLabel.textContent = `🎙️ 실시간 통역 중... [송신: ${this.chunksSent} | 수신: ${this.chunksReceived} 오디오]`;
     }
   }
@@ -847,19 +1059,30 @@ CRITICAL MANDATES:
 
   updateStatusUI(streaming) {
     if (streaming) {
-      this.btnToggleStream.className = 'mic-button streaming';
-      this.btnSoloMic.className = 'mic-button-floating streaming';
-      this.micIcon.classList.add('hidden');
-      this.stopIcon.classList.remove('hidden');
-      this.streamStatusLabel.textContent = '실시간 통역 중... (터치하여 중지)';
-      this.soloMicText.textContent = '통역 중지';
+      if (this.speechMode === 'ptt') {
+        this.btnToggleStream.className = this.isPttHolding ? 'mic-button ptt-active' : 'mic-button ptt-mode idle';
+        this.btnSoloMic.className = this.isPttHolding ? 'mic-button-floating ptt-active' : 'mic-button-floating ptt-mode idle';
+        this.micIcon.classList.remove('hidden');
+        this.stopIcon.classList.add('hidden');
+        this.streamStatusLabel.textContent = this.isPttHolding ? '🎙️ 말씀하세요... (듣는 중)' : '버튼을 누르고 있는 동안 말씀하세요 (Space 키 가능)';
+        this.soloMicText.textContent = this.isPttHolding ? '말씀하시는 중...' : '누르고 말하기';
+      } else {
+        this.btnToggleStream.className = 'mic-button streaming';
+        this.btnSoloMic.className = 'mic-button-floating streaming';
+        this.micIcon.classList.add('hidden');
+        this.stopIcon.classList.remove('hidden');
+        this.streamStatusLabel.textContent = '실시간 통역 중... (터치하여 중지)';
+        this.soloMicText.textContent = '통역 중지';
+      }
     } else {
-      this.btnToggleStream.className = 'mic-button idle';
-      this.btnSoloMic.className = 'mic-button-floating idle';
+      this.btnToggleStream.className = this.speechMode === 'ptt' ? 'mic-button ptt-mode idle' : 'mic-button idle';
+      this.btnSoloMic.className = this.speechMode === 'ptt' ? 'mic-button-floating ptt-mode idle' : 'mic-button-floating idle';
       this.micIcon.classList.remove('hidden');
       this.stopIcon.classList.add('hidden');
-      this.streamStatusLabel.textContent = '터치하여 동시통역 시작';
-      this.soloMicText.textContent = '통역 시작';
+      this.streamStatusLabel.textContent = this.speechMode === 'ptt'
+        ? '버튼을 누르고 있는 동안 말씀하세요 (Space 키 가능)'
+        : '터치하여 실시간 동시통역 시작 (중간 호흡 대기)';
+      this.soloMicText.textContent = this.speechMode === 'ptt' ? '누르고 말하기' : '통역 시작';
     }
   }
 
