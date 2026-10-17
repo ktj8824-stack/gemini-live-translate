@@ -129,18 +129,9 @@ class SplashIntro {
       const elapsed = now - this.startTime;
       const progress = Math.min(elapsed / this.duration, 1.0);
 
-      // Update progress bar & label
+      // Update progress bar
       if (this.progressBar) {
         this.progressBar.style.width = `${Math.min(progress * 105, 100)}%`;
-      }
-      if (this.statusText) {
-        if (progress < 0.4) {
-          this.statusText.textContent = '통역 신경망 연결 중...';
-        } else if (progress < 0.8) {
-          this.statusText.textContent = '오디오 스트리머 최적화 중...';
-        } else {
-          this.statusText.textContent = '통역 준비 완료!';
-        }
       }
 
       ctx.clearRect(0, 0, this.width, this.height);
