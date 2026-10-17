@@ -87,18 +87,33 @@ body {
   box-shadow: 0 0 12px rgba(0, 229, 255, 0.4);
 }
 
-.brand-text h1 {
+.brand-text {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  line-height: 1.1;
+}
+
+.brand-title {
   font-family: var(--font-display);
   font-size: 0.95rem;
-  font-weight: 700;
+  font-weight: 800;
   letter-spacing: -0.02em;
+  color: #ffffff;
+  margin: 0;
+  line-height: 1.1;
   white-space: nowrap;
 }
 
-.brand-text h1 span {
+.brand-subtitle {
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
   background: linear-gradient(135deg, #00e5ff, #8b5cf6);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
+  line-height: 1.1;
+  white-space: nowrap;
 }
 
 .model-badge {
@@ -1030,54 +1045,49 @@ input:checked + .slider:before {
 
 @media (max-width: 640px) {
   .app-header {
-    padding-left: max(env(safe-area-inset-left), 0.4rem);
-    padding-right: max(env(safe-area-inset-right), 0.4rem);
-    gap: 0.25rem;
-    min-height: 42px;
+    padding-left: max(env(safe-area-inset-left), 0.5rem);
+    padding-right: max(env(safe-area-inset-right), 0.5rem);
+    gap: 0.35rem;
+    min-height: 44px;
   }
   .brand {
-    gap: 0.35rem;
+    gap: 0.4rem;
   }
   .brand-logo {
-    width: 26px;
-    height: 26px;
-    font-size: 0.85rem;
-  }
-  .brand-text h1 {
-    font-size: 0.88rem;
-  }
-  .brand-text h1 span {
-    display: none; /* 모바일에서 Live Translate 텍스트를 숨겨 Gemini로 컴팩트하게 표시 (80px 절약) */
-  }
-  .header-controls {
-    gap: 0.22rem;
-  }
-  .segmented-control {
-    padding: 1px;
-  }
-  .segment {
-    padding: 0.2rem 0.35rem;
-    font-size: 0.68rem;
-    gap: 0.15rem;
-  }
-  .segment svg {
-    width: 12px;
-    height: 12px;
-  }
-  .ai-learning-pill {
-    padding: 0.2rem 0.35rem;
-    font-size: 0.68rem;
-    gap: 3px;
-  }
-  .icon-btn {
     width: 28px;
     height: 28px;
-    min-width: 28px;
+    font-size: 0.85rem;
+  }
+  .brand-title {
+    font-size: 0.92rem;
+  }
+  .brand-subtitle {
+    font-size: 0.6rem;
+  }
+  .header-controls {
+    gap: 0.35rem;
+  }
+  .segmented-control {
+    padding: 2px;
+  }
+  .segment {
+    padding: 0.22rem 0.45rem;
+    font-size: 0.72rem;
+    gap: 0.2rem;
+  }
+  .segment svg {
+    width: 13px;
+    height: 13px;
+  }
+  .icon-btn {
+    width: 30px;
+    height: 30px;
+    min-width: 30px;
     flex-shrink: 0;
   }
   .icon-btn svg {
-    width: 15px;
-    height: 15px;
+    width: 16px;
+    height: 16px;
   }
   .model-badge { display: none; }
   .live-text { font-size: 1.25rem; }
