@@ -4,3 +4,4 @@ node_modules/
 *.xcuserstate
 xcuserdata/
 DerivedData/
+ios/build/

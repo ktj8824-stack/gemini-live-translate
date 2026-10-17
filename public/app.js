@@ -58,19 +58,24 @@ class LiveTranslatorApp {
       echoCancellation: true
     };
 
-    // Speech & Turn Management (Pause tolerance & Push-to-Talk)
+    // Speech & Turn Management (Handsfree vs PTT completely decoupled)
     this.speechMode = localStorage.getItem('gemini_speech_mode') || 'handsfree'; // 'handsfree' | 'ptt'
+    
+    // [자동 감지 (Handsfree) 전용 설정 및 상태]
     this.pauseTolerance = parseInt(localStorage.getItem('gemini_pause_tolerance') || '2000', 10);
     this.smartGuard = localStorage.getItem('gemini_smart_guard') !== 'false';
+    this.handsfreeSilenceTimer = null;
+    this.isHandsfreeSpeaking = false;
+
+    // [누르고 말하기 (PTT) 전용 상태]
     this.isPttHolding = false;
-    this.isPttTailActive = false;
-    this.pttTailTimer = null;
-    this.pttTailDuration = 1200; // 1.2초 마이크 행오버 테일 유지
+    this.isPttWaitingCompletion = false;
     this.turnCompleteReceivedDuringTail = false;
+    this.pttTurnFallbackTimer = null;
+
     this.lastSpeechTime = 0;
     this.isUserSpeaking = false;
     this.pendingTurnTimer = null;
-    this.pttTurnFallbackTimer = null;
     this.pendingAudioQueue = [];
 
     this.history = JSON.parse(localStorage.getItem('gemini_chat_history') || '[]');
@@ -81,7 +86,7 @@ class LiveTranslatorApp {
     this.audioStreamer = new AudioStreamer({
       onAudioChunk: (chunk) => this.sendAudioChunk(chunk),
       onInputVolume: (vol) => {
-        if (this.speechMode === 'ptt' && !this.isPttHolding && !this.isPttTailActive) {
+        if (this.speechMode === 'ptt' && !this.isPttHolding) {
           this.drawWaveform('user-wave', 0, '#00e5ff');
           return;
         }
@@ -443,36 +448,50 @@ class LiveTranslatorApp {
     }
   }
 
+  sendSilenceBurst(count = 5) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    // 16000Hz 16-bit Mono PCM 60ms = 960 samples = 1920 zero bytes = 2560 'A's in base64
+    const silenceBase64 = 'A'.repeat(2560);
+    for (let i = 0; i < count; i++) {
+      setTimeout(() => {
+        if (this.ws && this.ws.readyState === WebSocket.OPEN && !this.isPttHolding) {
+          const payload = {
+            realtime_input: {
+              media_chunks: [
+                {
+                  mime_type: 'audio/pcm;rate=16000',
+                  data: silenceBase64
+                }
+              ]
+            }
+          };
+          this.ws.send(JSON.stringify(payload));
+          this.addDebugLog(`[PTT VAD] 무음 종결 신호 전송 (${i + 1}/${count})`);
+        }
+      }, i * 60);
+    }
+  }
+
   async handlePttDown(e) {
     if (this.speechMode !== 'ptt') return;
     if (e && e.cancelable && e.type !== 'keydown') e.preventDefault();
     if (this.isPttHolding) return;
 
-    // 만약 버튼에서 손을 뗀 후 1.2초 행오버(마이크 테일) 타이머가 돌고 있었다면 취소하고 계속 이어받음
-    if (this.pttTailTimer) {
-      clearTimeout(this.pttTailTimer);
-      this.pttTailTimer = null;
-    }
-
-    // 이전 발화 내용이 아직 미완료로 남아있고, 잔여 테일도 끝난 새 발화 시작이라면 이전 카드로 정리
-    if (!this.isPttTailActive && (this.currentInputText || this.currentOutputText)) {
-      this.flushCurrentTurnToHistory();
-    }
-
-    this.isPttTailActive = false;
-    this.turnCompleteReceivedDuringTail = false;
-    this.isPttHolding = true;
-    this.lastSpeechTime = Date.now();
-    this.isUserSpeaking = true;
-    if (this.pendingTurnTimer) {
-      clearTimeout(this.pendingTurnTimer);
-      this.pendingTurnTimer = null;
-    }
-
     if (this.pttTurnFallbackTimer) {
       clearTimeout(this.pttTurnFallbackTimer);
       this.pttTurnFallbackTimer = null;
     }
+
+    // 이전 발화 턴이 아직 처리 중이었다면 새 발화 시작 전 안전 플러시
+    if (this.currentInputText || this.currentOutputText) {
+      this.flushCurrentTurnToHistory();
+    }
+
+    this.isPttHolding = true;
+    this.isPttWaitingCompletion = false;
+    this.turnCompleteReceivedDuringTail = false;
+    this.lastSpeechTime = Date.now();
+    this.isUserSpeaking = true;
 
     this.btnToggleStream.classList.add('ptt-active');
     this.btnSoloMic.classList.add('ptt-active');
@@ -490,80 +509,115 @@ class LiveTranslatorApp {
     if (e && e.cancelable && e.type !== 'keyup') e.preventDefault();
 
     this.isPttHolding = false;
-    this.isPttTailActive = true;
+    this.isPttWaitingCompletion = true;
     this.turnCompleteReceivedDuringTail = false;
+    this.isUserSpeaking = false;
 
-    // 버튼 눌림 시각 효과는 즉시 해제 (손을 뗐음을 즉각 피드백)
+    // 1. 버튼 눌림 시각 효과는 즉시 해제 (손을 뗐음을 즉각 피드백)
     this.btnToggleStream.classList.remove('ptt-active');
     this.btnSoloMic.classList.remove('ptt-active');
-    this.streamStatusLabel.textContent = '🎙️ 끝말 수집 중... (마이크 잔여 유지)';
-    this.soloMicText.textContent = '끝말 수집 중...';
-    this.setStatusPill('끝말 전송 중...', '#10b981');
+    this.streamStatusLabel.textContent = '⚡ 번역 완성 및 음성 출력 중...';
+    this.soloMicText.textContent = '번역 처리 중...';
+    this.setStatusPill('번역 출력 중...', '#00e5ff');
 
-    if (this.pttTailTimer) {
-      clearTimeout(this.pttTailTimer);
+    // 2. Gemini Live 신경망에 "문장이 끝났다"는 명확한 침묵 신호(Zero PCM Silence Burst)를 전송
+    //    이를 통해 사용자가 화면을 보며 기다리지 않아도 AI가 전체 문장 번역을 즉각 완성하도록 유도
+    this.sendSilenceBurst(5);
+
+    // 3. 누르고 있는 동안 도착해서 보류되었던 번역 오디오가 있다면 즉시 재생
+    this.playPendingAudioQueue();
+
+    // 4. 턴 완결 대기 안전 타이머: turnComplete 신호가 5초 내에 수신되지 않을 경우 세이프티 마감
+    if (this.pttTurnFallbackTimer) {
+      clearTimeout(this.pttTurnFallbackTimer);
+    }
+    this.pttTurnFallbackTimer = setTimeout(() => {
+      if (this.speechMode === 'ptt' && !this.isPttHolding && this.isPttWaitingCompletion) {
+        this.addDebugLog('[PTT Fallback] turnComplete 미수신 세이프티 마감');
+        this.finishPttTurn();
+      }
+    }, 5000);
+  }
+
+  finishPttTurn() {
+    if (this.pttTurnFallbackTimer) {
+      clearTimeout(this.pttTurnFallbackTimer);
+      this.pttTurnFallbackTimer = null;
     }
 
-    // [핵심] 손을 떼더라도 1.2초간 마이크를 열어두어 끝 단어와 오디오 버퍼가 서버에 온전히 도달하도록 보장
-    this.pttTailTimer = setTimeout(() => {
-      this.isPttTailActive = false;
-      this.pttTailTimer = null;
-      this.isUserSpeaking = false;
+    // 번역 오디오가 재생 중이라면 소리가 끝날 때까지 대기 후 히스토리로 마감
+    const remainingSec = this.audioStreamer ? this.audioStreamer.getRemainingPlaybackTime() : 0;
+    const waitMs = Math.max(150, Math.round(remainingSec * 1000) + 200);
 
-      this.streamStatusLabel.textContent = '⚡ 전체 문장 번역 및 출력 중...';
-      this.soloMicText.textContent = '번역 처리 중...';
-      this.setStatusPill('번역 출력 중...', '#00e5ff');
-
-      // 마이크 전송이 닫힌 시점에 대기 중이던 오디오 청크 재생 시작
-      this.playPendingAudioQueue();
-
-      // 만약 1.2초 테일 동안 이미 Gemini에서 turnComplete가 도착했었다면 즉시 카드 플러시
-      if (this.turnCompleteReceivedDuringTail) {
-        this.turnCompleteReceivedDuringTail = false;
-        this.flushCurrentTurnToHistory();
-        this.updatePttIdleUI();
-        return;
-      }
-
-      // Gemini 모델의 전체 문장 번역 완료 신호 대기 세이프티 폴백
-      if (this.pttTurnFallbackTimer) {
-        clearTimeout(this.pttTurnFallbackTimer);
-      }
-      this.pttTurnFallbackTimer = setTimeout(() => {
-        if (!this.isPttHolding && !this.isPttTailActive && (this.currentInputText || this.currentOutputText)) {
-          this.addDebugLog('[PTT Fallback] turnComplete 미수신 -> 안전 플러시');
+    setTimeout(() => {
+      if (this.speechMode === 'ptt' && !this.isPttHolding) {
+        this.isPttWaitingCompletion = false;
+        if (this.currentInputText || this.currentOutputText) {
           this.flushCurrentTurnToHistory();
-          this.updatePttIdleUI();
         }
-      }, 3500);
-    }, this.pttTailDuration);
+        this.updatePttIdleUI();
+      }
+    }, waitMs);
   }
 
   updatePttIdleUI() {
-    if (this.speechMode === 'ptt' && !this.isPttHolding && !this.isPttTailActive) {
+    if (this.speechMode === 'ptt' && !this.isPttHolding && !this.isPttWaitingCompletion) {
       this.streamStatusLabel.textContent = '버튼을 누르고 있는 동안 말씀하세요 (Space 키 가능)';
       this.soloMicText.textContent = '누르고 말하기';
       this.setStatusPill('대기 중 (누르고 말하기)', '#10b981');
     }
   }
 
+  // [자동 감지 모드 전용] 음성 볼륨 및 발화 멈춤 대기 시간(Pause Tolerance) 관리
   handleVoiceVolume(vol) {
-    // Ultra-sensitive threshold (0.006) to catch distant partner speech
-    if (vol > 0.006) {
+    if (this.speechMode !== 'handsfree') return;
+
+    if (vol > 0.008) {
+      this.isHandsfreeSpeaking = true;
       this.lastSpeechTime = Date.now();
-      this.isUserSpeaking = true;
-      if (this.pendingTurnTimer) {
-        clearTimeout(this.pendingTurnTimer);
-        this.pendingTurnTimer = null;
+      if (this.handsfreeSilenceTimer) {
+        clearTimeout(this.handsfreeSilenceTimer);
+        this.handsfreeSilenceTimer = null;
+      }
+    } else if (this.isHandsfreeSpeaking) {
+      // 말이 잦아들었을 때 설정창에서 지정한 발화 멈춤 대기 시간(pauseTolerance) 동안 침묵인지 관찰
+      if (!this.handsfreeSilenceTimer) {
+        this.handsfreeSilenceTimer = setTimeout(() => {
+          this.onHandsfreeSpeechEnded();
+        }, this.pauseTolerance);
       }
     }
   }
 
+  onHandsfreeSpeechEnded() {
+    this.isHandsfreeSpeaking = false;
+    this.handsfreeSilenceTimer = null;
+    this.addDebugLog(`[자동감지] 발화 멈춤 감지 (${this.pauseTolerance}ms 경과) -> 턴 정리`);
+
+    // 스마트 긴 문장 보호로 보류되었던 번역 음성 일괄 재생
+    this.playPendingAudioQueue();
+
+    // 만약 이미 서버에서 turnComplete가 도착해 있었다면 마감 진행
+    if (this.turnCompleteReceivedDuringTail) {
+      this.turnCompleteReceivedDuringTail = false;
+      const remainingSec = this.audioStreamer ? this.audioStreamer.getRemainingPlaybackTime() : 0;
+      const waitMs = Math.max(100, Math.round(remainingSec * 1000) + 150);
+      setTimeout(() => {
+        if (this.speechMode === 'handsfree') {
+          this.flushCurrentTurnToHistory();
+        }
+      }, waitMs);
+    }
+  }
+
   shouldHoldAudioPlayback() {
-    // ONLY hold audio when user is actively holding down the PTT button!
-    // In handsfree/auto mode, stream audio chunks in real-time immediately to prevent audio buffer truncation
-    if (this.speechMode === 'ptt' && this.isPttHolding) {
-      return true;
+    if (this.speechMode === 'ptt') {
+      // PTT 모드: 버튼을 누르고 있는 동안에만 보류
+      return this.isPttHolding;
+    }
+    if (this.speechMode === 'handsfree') {
+      // 자동 감지 모드: 스마트 긴 문장 보호가 켜져 있고 사용자가 말하고 있을 때만 보류
+      return this.smartGuard && this.isHandsfreeSpeaking;
     }
     return false;
   }
@@ -986,8 +1040,8 @@ Do not include markdown code block quotes. Output pure JSON only.`;
   }
 
   sendAudioChunk(base64Data) {
-    // [CRITICAL] PTT 모드일 때는 버튼을 누르고 있거나 릴리즈 후 잔여 테일(1.2초) 동안만 오디오 전송
-    if (this.speechMode === 'ptt' && !this.isPttHolding && !this.isPttTailActive) {
+    // [CRITICAL] PTT 모드일 때는 버튼을 누르고 있는 동안에만 실시간 마이크 오디오 전송 (손을 뗀 후 잡음 유입 차단)
+    if (this.speechMode === 'ptt' && !this.isPttHolding) {
       return;
     }
 
@@ -1026,15 +1080,14 @@ Do not include markdown code block quotes. Output pure JSON only.`;
     if (!serverContent) return;
 
     const refreshPttFallback = () => {
-      if (this.speechMode === 'ptt' && !this.isPttHolding && !this.isPttTailActive && this.pttTurnFallbackTimer) {
+      if (this.speechMode === 'ptt' && !this.isPttHolding && this.isPttWaitingCompletion && this.pttTurnFallbackTimer) {
         clearTimeout(this.pttTurnFallbackTimer);
         this.pttTurnFallbackTimer = setTimeout(() => {
-          if (!this.isPttHolding && !this.isPttTailActive && (this.currentInputText || this.currentOutputText)) {
-            this.addDebugLog('[PTT Fallback] 스트리밍 완료 후 대기 종료 -> 안전 플러시');
-            this.flushCurrentTurnToHistory();
-            this.updatePttIdleUI();
+          if (!this.isPttHolding && this.isPttWaitingCompletion) {
+            this.addDebugLog('[PTT Fallback] 스트리밍 완료 후 대기 종료 -> 안전 마감');
+            this.finishPttTurn();
           }
-        }, 2000);
+        }, 2500);
       }
     };
 
@@ -1048,6 +1101,19 @@ Do not include markdown code block quotes. Output pure JSON only.`;
         clearTimeout(this.pendingTurnTimer);
         this.pendingTurnTimer = null;
       }
+
+      // [자동 감지 모드] 자막 수신 시 발화 중 상태 유지 및 pauseTolerance 타이머 갱신
+      if (this.speechMode === 'handsfree') {
+        this.isHandsfreeSpeaking = true;
+        if (this.handsfreeSilenceTimer) {
+          clearTimeout(this.handsfreeSilenceTimer);
+          this.handsfreeSilenceTimer = null;
+        }
+        this.handsfreeSilenceTimer = setTimeout(() => {
+          this.onHandsfreeSpeechEnded();
+        }, this.pauseTolerance);
+      }
+
       refreshPttFallback();
       this.addDebugLog(`[STT 원문] ${inTrans.text}`);
       this.renderLiveTranscript();
@@ -1079,9 +1145,14 @@ Do not include markdown code block quotes. Output pure JSON only.`;
           refreshPttFallback();
           this.addDebugLog(`[오디오 수신] chunk #${this.chunksReceived}`);
           if (this.settings.audioOutputEnabled) {
-            if (this.speechMode === 'ptt' && (this.isPttHolding || this.isPttTailActive)) {
+            if (this.speechMode === 'ptt' && this.isPttHolding) {
+              // PTT 모드: 버튼을 누르고 있는 동안에는 번역 오디오를 보류
               this.pendingAudioQueue.push(inlineData.data);
-              this.addDebugLog('[오디오 보류] PTT 누름 또는 끝말 수집 상태');
+              this.addDebugLog('[오디오 보류] PTT 누름 중');
+            } else if (this.speechMode === 'handsfree' && this.smartGuard && this.isHandsfreeSpeaking) {
+              // 자동 감지 모드 + 스마트 긴 문장 보호 ON: 말하는 도중에는 번역 오디오 보류
+              this.pendingAudioQueue.push(inlineData.data);
+              this.addDebugLog('[오디오 보류] 자동감지 발화 중');
             } else {
               this.audioStreamer.playChunk(inlineData.data);
             }
@@ -1090,19 +1161,30 @@ Do not include markdown code block quotes. Output pure JSON only.`;
       }
     }
 
+    // 4. Turn Complete (서버측 턴 완결 신호)
     if (serverContent.turnComplete || serverContent.turn_complete) {
-      if (this.pttTurnFallbackTimer) {
-        clearTimeout(this.pttTurnFallbackTimer);
-        this.pttTurnFallbackTimer = null;
-      }
+      this.addDebugLog('[Turn Complete] 서버 턴 완결 신호 수신');
 
-      if (this.speechMode === 'ptt' && (this.isPttHolding || this.isPttTailActive)) {
-        this.addDebugLog('[Turn Complete] PTT 입력 또는 끝말 수집 중 -> 완료 플래그 저장');
-        this.turnCompleteReceivedDuringTail = true;
+      if (this.speechMode === 'ptt') {
+        if (this.isPttHolding) {
+          // 사용자가 아직 마이크를 누르고 있다면 손을 뗄 때까지 플래그만 보존
+          this.turnCompleteReceivedDuringTail = true;
+        } else {
+          // 이미 손을 뗐다면 오디오 재생 완료 확인 후 깔끔하게 턴 마감
+          this.finishPttTurn();
+        }
       } else {
-        this.flushCurrentTurnToHistory();
-        if (this.speechMode === 'ptt') {
-          this.updatePttIdleUI();
+        // [자동 감지 모드] 스마트 긴 문장 보호가 켜져 있고 아직 말하고 있다면 보류
+        if (this.smartGuard && this.isHandsfreeSpeaking) {
+          this.turnCompleteReceivedDuringTail = true;
+        } else {
+          const remainingSec = this.audioStreamer ? this.audioStreamer.getRemainingPlaybackTime() : 0;
+          const waitMs = Math.max(100, Math.round(remainingSec * 1000) + 150);
+          setTimeout(() => {
+            if (this.speechMode === 'handsfree') {
+              this.flushCurrentTurnToHistory();
+            }
+          }, waitMs);
         }
       }
     }

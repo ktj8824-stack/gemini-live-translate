@@ -312,12 +312,21 @@ class AudioStreamer {
         for (let i = 0; i < float32Array.length; i++) {
           sum += float32Array[i] * float32Array[i];
         }
-        const rms = Math.sqrt(sum / float32Array.length);
         this.onOutputVolume(rms);
       }
     } catch (err) {
       console.error('[AudioStreamer] Error playing chunk:', err);
     }
+  }
+
+  getRemainingPlaybackTime() {
+    if (!this.outputAudioContext) return 0;
+    const remaining = this.nextPlayTime - this.outputAudioContext.currentTime;
+    return remaining > 0 ? remaining : 0;
+  }
+
+  isPlaybackActive() {
+    return this.getRemainingPlaybackTime() > 0.05;
   }
 }
 
