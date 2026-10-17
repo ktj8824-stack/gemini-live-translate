@@ -75,6 +75,10 @@ class LiveTranslatorApp {
     this.audioStreamer = new AudioStreamer({
       onAudioChunk: (chunk) => this.sendAudioChunk(chunk),
       onInputVolume: (vol) => {
+        if (this.speechMode === 'ptt' && !this.isPttHolding) {
+          this.drawWaveform('user-wave', 0, '#00e5ff');
+          return;
+        }
         this.drawWaveform('user-wave', vol, '#00e5ff');
         this.updateVolumeBar(vol);
         this.handleVoiceVolume(vol);
@@ -891,6 +895,11 @@ Do not include markdown code block quotes. Output pure JSON only.`;
   }
 
   sendAudioChunk(base64Data) {
+    // [CRITICAL] PTT (누르고 말하기) 모드일 때는 버튼을 누르고 있지 않으면 오디오를 절대 전송하지 않음!
+    if (this.speechMode === 'ptt' && !this.isPttHolding) {
+      return;
+    }
+
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.chunksSent++;
       const payload = {
