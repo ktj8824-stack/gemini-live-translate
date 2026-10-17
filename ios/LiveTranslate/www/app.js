@@ -66,6 +66,7 @@ class LiveTranslatorApp {
     this.lastSpeechTime = 0;
     this.isUserSpeaking = false;
     this.pendingTurnTimer = null;
+    this.pttTurnFallbackTimer = null;
     this.pendingAudioQueue = [];
 
     this.history = JSON.parse(localStorage.getItem('gemini_chat_history') || '[]');
@@ -443,6 +444,16 @@ class LiveTranslatorApp {
     if (e && e.cancelable && e.type !== 'keydown') e.preventDefault();
     if (this.isPttHolding) return;
 
+    // 이전 발화 내용이 아직 미완료로 남아있다면 새 발화 시작 전 안전하게 이전 카드로 등록
+    if (this.currentInputText || this.currentOutputText) {
+      this.flushCurrentTurnToHistory();
+    }
+
+    if (this.pttTurnFallbackTimer) {
+      clearTimeout(this.pttTurnFallbackTimer);
+      this.pttTurnFallbackTimer = null;
+    }
+
     this.isPttHolding = true;
     this.lastSpeechTime = Date.now();
     this.isUserSpeaking = true;
@@ -474,15 +485,29 @@ class LiveTranslatorApp {
     this.soloMicText.textContent = '번역 처리 중...';
     this.setStatusPill('번역 출력 중...', '#00e5ff');
 
-    setTimeout(() => {
-      this.flushCurrentTurnToHistory();
-      this.playPendingAudioQueue();
-      if (this.speechMode === 'ptt' && !this.isPttHolding) {
-        this.streamStatusLabel.textContent = '버튼을 누르고 있는 동안 말씀하세요 (Space 키 가능)';
-        this.soloMicText.textContent = '누르고 말하기';
-        this.setStatusPill('대기 중 (누르고 말하기)', '#10b981');
+    // 버튼을 뗀 즉시, 버튼을 누르고 있는 동안 보류되었던 오디오 재생 시작
+    this.playPendingAudioQueue();
+
+    // [핵심] 인위적인 350ms 조기 컷오프를 제거하여 문장이 두 동강 나는 현상 원천 차단!
+    // Gemini 모델이 전체 문장 번역을 완료하고 전송하는 공식 turnComplete 신호에 맞춰 카드를 등록합니다.
+    if (this.pttTurnFallbackTimer) {
+      clearTimeout(this.pttTurnFallbackTimer);
+    }
+    this.pttTurnFallbackTimer = setTimeout(() => {
+      if (!this.isPttHolding && (this.currentInputText || this.currentOutputText)) {
+        this.addDebugLog('[PTT Fallback] turnComplete 미수신 -> 안전 플러시');
+        this.flushCurrentTurnToHistory();
+        this.updatePttIdleUI();
       }
-    }, 350);
+    }, 3500);
+  }
+
+  updatePttIdleUI() {
+    if (this.speechMode === 'ptt' && !this.isPttHolding) {
+      this.streamStatusLabel.textContent = '버튼을 누르고 있는 동안 말씀하세요 (Space 키 가능)';
+      this.soloMicText.textContent = '누르고 말하기';
+      this.setStatusPill('대기 중 (누르고 말하기)', '#10b981');
+    }
   }
 
   handleVoiceVolume(vol) {
@@ -943,6 +968,19 @@ Do not include markdown code block quotes. Output pure JSON only.`;
     const serverContent = data.serverContent || data.server_content || data.payload?.serverContent;
     if (!serverContent) return;
 
+    const refreshPttFallback = () => {
+      if (this.speechMode === 'ptt' && !this.isPttHolding && this.pttTurnFallbackTimer) {
+        clearTimeout(this.pttTurnFallbackTimer);
+        this.pttTurnFallbackTimer = setTimeout(() => {
+          if (!this.isPttHolding && (this.currentInputText || this.currentOutputText)) {
+            this.addDebugLog('[PTT Fallback] 스트리밍 완료 후 대기 종료 -> 안전 플러시');
+            this.flushCurrentTurnToHistory();
+            this.updatePttIdleUI();
+          }
+        }, 2000);
+      }
+    };
+
     // 1. Input Transcript (User / Partner STT)
     const inTrans = serverContent.inputTranscription || serverContent.input_transcription;
     if (inTrans && inTrans.text) {
@@ -953,6 +991,7 @@ Do not include markdown code block quotes. Output pure JSON only.`;
         clearTimeout(this.pendingTurnTimer);
         this.pendingTurnTimer = null;
       }
+      refreshPttFallback();
       this.addDebugLog(`[STT 원문] ${inTrans.text}`);
       this.renderLiveTranscript();
     }
@@ -961,6 +1000,7 @@ Do not include markdown code block quotes. Output pure JSON only.`;
     const outTrans = serverContent.outputTranscription || serverContent.output_transcription;
     if (outTrans && outTrans.text) {
       this.currentOutputText += outTrans.text;
+      refreshPttFallback();
       this.addDebugLog(`[번역문] ${outTrans.text}`);
       this.renderLiveTranscript();
     }
@@ -971,6 +1011,7 @@ Do not include markdown code block quotes. Output pure JSON only.`;
       for (const part of modelTurn.parts) {
         if (part.text) {
           this.currentOutputText += part.text;
+          refreshPttFallback();
           this.addDebugLog(`[번역문] ${part.text}`);
           this.renderLiveTranscript();
         }
@@ -978,6 +1019,7 @@ Do not include markdown code block quotes. Output pure JSON only.`;
         if (inlineData && inlineData.data) {
           this.chunksReceived++;
           this.updateStatsBar();
+          refreshPttFallback();
           this.addDebugLog(`[오디오 수신] chunk #${this.chunksReceived}`);
           if (this.settings.audioOutputEnabled) {
             if (this.speechMode === 'ptt' && this.isPttHolding) {
@@ -992,10 +1034,18 @@ Do not include markdown code block quotes. Output pure JSON only.`;
     }
 
     if (serverContent.turnComplete || serverContent.turn_complete) {
+      if (this.pttTurnFallbackTimer) {
+        clearTimeout(this.pttTurnFallbackTimer);
+        this.pttTurnFallbackTimer = null;
+      }
+
       if (this.speechMode === 'ptt' && this.isPttHolding) {
         this.addDebugLog('[Turn Complete] PTT 입력 중 -> 대기');
       } else {
         this.flushCurrentTurnToHistory();
+        if (this.speechMode === 'ptt') {
+          this.updatePttIdleUI();
+        }
       }
     }
   }
