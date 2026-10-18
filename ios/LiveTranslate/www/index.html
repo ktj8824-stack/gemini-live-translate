@@ -9,7 +9,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@300;400;500;600;700;800&family=Outfit:wght@400;600;700;800&display=swap" rel="stylesheet">
   <link rel="icon" type="image/png" href="app-icon.png">
   <link rel="apple-touch-icon" href="app-icon.png">
-  <link rel="stylesheet" href="styles.css?v=1.1.4">
+  <link rel="stylesheet" href="styles.css?v=1.1.5">
 </head>
 <body class="mode-split">
   <!-- App Splash & Motion Intro Screen -->
@@ -304,10 +304,14 @@
             </strong>
             <p>자주 틀리는 단어나 전문 용어, 사내 명칭을 등록하면 통역 AI가 즉시 기억하여 우선 번역합니다.</p>
           </div>
-          <div style="display: flex; gap: 0.5rem; width: 100%;">
-            <input type="text" id="dict-source-word" placeholder="원문 단어/문구 (예: 번역톡)" style="flex: 1; padding: 0.6rem; border-radius: 8px; background: rgba(0,0,0,0.4); color:#fff; border: 1px solid var(--border-color); font-size: 0.85rem;">
-            <input type="text" id="dict-target-word" placeholder="맞춤 번역어 (예: TalkTranslate)" style="flex: 1; padding: 0.6rem; border-radius: 8px; background: rgba(0,0,0,0.4); color:#fff; border: 1px solid var(--border-color); font-size: 0.85rem;">
-            <button id="btn-add-dict-rule" class="primary-btn" style="padding: 0.6rem 1rem; white-space: nowrap; font-size: 0.85rem;">학습 추가</button>
+          <div style="display: flex; flex-direction: column; gap: 0.6rem; width: 100%;">
+            <div style="display: flex; gap: 0.5rem; width: 100%;">
+              <input type="text" id="dict-source-word" placeholder="원문 단어/문구 (예: 번역톡)" style="flex: 1; min-width: 0; padding: 0.65rem 0.75rem; border-radius: 8px; background: rgba(0,0,0,0.45); color:#fff; border: 1px solid var(--border-color); font-size: 0.85rem;">
+              <input type="text" id="dict-target-word" placeholder="맞춤 번역어 (예: TalkTranslate)" style="flex: 1; min-width: 0; padding: 0.65rem 0.75rem; border-radius: 8px; background: rgba(0,0,0,0.45); color:#fff; border: 1px solid var(--border-color); font-size: 0.85rem;">
+            </div>
+            <button id="btn-add-dict-rule" class="primary-btn" style="width: 100%; padding: 0.75rem 1rem; border-radius: 8px; font-size: 0.9rem; font-weight: 600; background: linear-gradient(135deg, #00e5ff, #3b82f6); color: #050811; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; box-shadow: 0 4px 15px rgba(0, 229, 255, 0.35);">
+              <span>➕ AI 맞춤 학습 추가 및 즉시 적용</span>
+            </button>
           </div>
           <div id="dict-rules-list" style="width: 100%; max-height: 140px; overflow-y: auto; margin-top: 0.5rem; display: flex; flex-direction: column; gap: 6px;">
             <!-- Dynamic Learned Rules -->
