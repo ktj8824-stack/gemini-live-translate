@@ -9,7 +9,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@300;400;500;600;700;800&family=Outfit:wght@400;600;700;800&display=swap" rel="stylesheet">
   <link rel="icon" type="image/png" href="app-icon.png">
   <link rel="apple-touch-icon" href="app-icon.png">
-  <link rel="stylesheet" href="styles.css?v=1.1.7">
+  <link rel="stylesheet" href="styles.css?v=1.2.0">
 </head>
 <body class="mode-split">
   <!-- App Splash & Motion Intro Screen -->
@@ -118,6 +118,17 @@
         <div class="audio-wave-wrap">
           <canvas id="partner-wave" class="audio-wave" width="400" height="40"></canvas>
         </div>
+
+        <!-- 상대방 전용 PTT 마이크 버튼 (누르고 말하기 모드 시 활성화) -->
+        <div id="partner-ptt-container" class="zone-ptt-container partner-ptt-wrap hidden">
+          <button id="btn-ptt-partner" class="zone-ptt-button partner-ptt-btn" title="상대방: 누르고 있는 동안 말씀하세요">
+            <div class="ptt-btn-inner">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+              <span id="partner-ptt-btn-text">누르고 말하기 (Guest)</span>
+            </div>
+            <div class="ptt-pulse-ring"></div>
+          </button>
+        </div>
       </section>
 
       <!-- Center Divider & Control Bar -->
@@ -146,7 +157,7 @@
             <div class="pulse-ring-2"></div>
           </button>
           <span id="stream-status-label" class="status-label">터치하여 동시통역 시작</span>
-          <span id="ptt-hint-label" class="ptt-hint hidden">💡 버튼을 누른 채로 말하고 손을 떼세요 (Space 키 가능)</span>
+          <span id="ptt-hint-label" class="ptt-hint hidden">💡 위/아래의 마이크 버튼을 누른 채로 말씀하세요</span>
         </div>
 
         <div class="quick-clear-wrap">
@@ -179,6 +190,17 @@
 
         <div class="audio-wave-wrap">
           <canvas id="user-wave" class="audio-wave" width="400" height="40"></canvas>
+        </div>
+
+        <!-- 나 전용 PTT 마이크 버튼 (누르고 말하기 모드 시 활성화) -->
+        <div id="user-ptt-container" class="zone-ptt-container user-ptt-wrap hidden">
+          <button id="btn-ptt-user" class="zone-ptt-button user-ptt-btn" title="나: 누르고 있는 동안 말씀하세요">
+            <div class="ptt-btn-inner">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+              <span id="user-ptt-btn-text">누르고 말하기 (나)</span>
+            </div>
+            <div class="ptt-pulse-ring"></div>
+          </button>
         </div>
       </section>
 
@@ -319,6 +341,6 @@
   <!-- Audio Streamer & App Scripts -->
   <script src="audio-streamer.js?v=1.0.8"></script>
   <script src="splash.js?v=1.1.4"></script>
-  <script src="app.js?v=1.1.0"></script>
+  <script src="app.js?v=1.2.0"></script>
 </body>
 </html>

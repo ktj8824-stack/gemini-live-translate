@@ -590,6 +590,126 @@ body {
   animation: fadeIn 0.3s ease;
 }
 
+/* Dual Zone PTT Buttons (Top Partner & Bottom User) */
+.zone-ptt-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 0.35rem 0.8rem;
+  width: 100%;
+  animation: fadeIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.zone-ptt-container.hidden {
+  display: none !important;
+}
+
+.zone-ptt-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 190px;
+  max-width: 260px;
+  width: 70%;
+  height: 46px;
+  border-radius: 999px;
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+  outline: none;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  overflow: visible;
+}
+
+.zone-ptt-button .ptt-btn-inner {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+/* Partner PTT Button (Neon Pink / Violet themed) */
+.partner-ptt-btn {
+  background: rgba(24, 18, 32, 0.92);
+  color: #fce7f3;
+  border: 1.5px solid rgba(236, 72, 153, 0.65);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.5), inset 0 0 14px rgba(236, 72, 153, 0.2);
+}
+
+.partner-ptt-btn:hover {
+  border-color: rgba(236, 72, 153, 0.85);
+  box-shadow: 0 6px 24px rgba(236, 72, 153, 0.4), inset 0 0 18px rgba(236, 72, 153, 0.3);
+}
+
+.partner-ptt-btn.ptt-active {
+  background: linear-gradient(135deg, #ec4899, #8b5cf6) !important;
+  color: #ffffff !important;
+  border-color: #f472b6 !important;
+  transform: scale(1.05) !important;
+  box-shadow: 0 0 30px rgba(236, 72, 153, 0.85), inset 0 0 15px rgba(255, 255, 255, 0.4) !important;
+}
+
+/* User PTT Button (Neon Cyan / Blue themed) */
+.user-ptt-btn {
+  background: rgba(14, 24, 38, 0.92);
+  color: #e0f2fe;
+  border: 1.5px solid rgba(0, 229, 255, 0.65);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.5), inset 0 0 14px rgba(0, 229, 255, 0.2);
+}
+
+.user-ptt-btn:hover {
+  border-color: rgba(0, 229, 255, 0.85);
+  box-shadow: 0 6px 24px rgba(0, 229, 255, 0.4), inset 0 0 18px rgba(0, 229, 255, 0.3);
+}
+
+.user-ptt-btn.ptt-active {
+  background: linear-gradient(135deg, #00e5ff, #3b82f6) !important;
+  color: #050811 !important;
+  border-color: #38bdf8 !important;
+  transform: scale(1.05) !important;
+  box-shadow: 0 0 30px rgba(0, 229, 255, 0.85), inset 0 0 15px rgba(255, 255, 255, 0.4) !important;
+}
+
+/* PTT Pulse Ring */
+.zone-ptt-button .ptt-pulse-ring {
+  position: absolute;
+  inset: -6px;
+  border-radius: 999px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+
+.partner-ptt-btn.ptt-active .ptt-pulse-ring {
+  opacity: 1;
+  border: 2px solid rgba(236, 72, 153, 0.7);
+  animation: pttPulseAnim 1.2s infinite ease-out;
+}
+
+.user-ptt-btn.ptt-active .ptt-pulse-ring {
+  opacity: 1;
+  border: 2px solid rgba(0, 229, 255, 0.7);
+  animation: pttPulseAnim 1.2s infinite ease-out;
+}
+
+@keyframes pttPulseAnim {
+  0% {
+    transform: scale(0.98);
+    opacity: 0.8;
+  }
+  100% {
+    transform: scale(1.22);
+    opacity: 0;
+  }
+}
+
 /* Mic Button with Ripples */
 .mic-button {
   position: relative;
