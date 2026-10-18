@@ -140,10 +140,16 @@ class LiveTranslatorApp {
     this.soloUserLang = document.getElementById('solo-user-lang');
     this.soloTargetLang = document.getElementById('solo-target-lang');
 
-    this.userInputText = document.getElementById('user-input-text');
-    this.userOutputText = document.getElementById('user-output-text');
-    this.partnerInputText = document.getElementById('partner-input-text');
-    this.partnerOutputText = document.getElementById('partner-output-text');
+    this.userPrimaryText = document.getElementById('user-primary-text') || document.getElementById('user-output-text');
+    this.userSecondaryText = document.getElementById('user-secondary-text') || document.getElementById('user-input-text');
+    this.partnerPrimaryText = document.getElementById('partner-primary-text') || document.getElementById('partner-output-text');
+    this.partnerSecondaryText = document.getElementById('partner-secondary-text') || document.getElementById('partner-input-text');
+
+    // 하위 호환성 별칭
+    this.userInputText = this.userSecondaryText;
+    this.userOutputText = this.userPrimaryText;
+    this.partnerInputText = this.partnerSecondaryText;
+    this.partnerOutputText = this.partnerPrimaryText;
     this.userChatLog = document.getElementById('user-chat-log');
     this.partnerChatLog = document.getElementById('partner-chat-log');
     this.userLiveWrap = document.getElementById('user-live-wrap');
@@ -411,10 +417,10 @@ class LiveTranslatorApp {
     }
 
     // 5. 실시간 자막 초기 힌트 텍스트 복원
-    if (this.userInputText) this.userInputText.textContent = '말씀을 시작하세요...';
-    if (this.userOutputText) this.userOutputText.textContent = '번역 결과가 여기에 표시됩니다.';
-    if (this.partnerInputText) this.partnerInputText.textContent = 'You speak, and it translates in real time.';
-    if (this.partnerOutputText) this.partnerOutputText.textContent = '말씀하시면 실시간으로 번역됩니다.';
+    if (this.userPrimaryText) this.userPrimaryText.textContent = '말씀을 시작하세요...';
+    if (this.userSecondaryText) this.userSecondaryText.textContent = '번역 결과가 여기에 함께 표시됩니다.';
+    if (this.partnerPrimaryText) this.partnerPrimaryText.textContent = 'Real-time translation will appear here.';
+    if (this.partnerSecondaryText) this.partnerSecondaryText.textContent = '말씀하시면 실시간으로 통역됩니다.';
 
     // 6. 내부 버퍼 초기화
     this.currentInputText = '';
@@ -1240,15 +1246,120 @@ Do not include markdown code block quotes. Output pure JSON only.`;
     }
   }
 
+  isTextInLang(text, langCode) {
+    if (!text || typeof text !== 'string') return false;
+    const clean = text.trim();
+    if (!clean) return false;
+
+    // 한국어
+    if (langCode === 'ko') {
+      return /[\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]/.test(clean);
+    }
+    // 일본어
+    if (langCode === 'ja') {
+      return /[\u3040-\u309f\u30a0-\u30ff]/.test(clean);
+    }
+    // 중국어
+    if (langCode && langCode.startsWith('zh')) {
+      return /[\u4e00-\u9fff]/.test(clean);
+    }
+    // 아랍어
+    if (langCode === 'ar') {
+      return /[\u0600-\u06ff]/.test(clean);
+    }
+    // 러시아어 / 우크라이나어
+    if (langCode === 'ru' || langCode === 'uk') {
+      return /[\u0400-\u04ff]/.test(clean);
+    }
+    // 태국어
+    if (langCode === 'th') {
+      return /[\u0e00-\u0e7f]/.test(clean);
+    }
+    // 힌디어
+    if (langCode === 'hi') {
+      return /[\u0900-\u097f]/.test(clean);
+    }
+    // 베트남어
+    if (langCode === 'vi') {
+      return /[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/i.test(clean);
+    }
+    // 라틴 문자 기반 언어 (영어, 스페인어, 프랑스어, 독일어 등)
+    return /[a-zA-Z]/.test(clean);
+  }
+
+  splitLanguages(input, output, explicitSpeaker = null) {
+    const textA = (input || '').trim();
+    const textB = (output || '').trim();
+
+    // 1. PTT 모드에서 화자가 명시적으로 정해진 경우
+    const speaker = explicitSpeaker || (this.speechMode === 'ptt' ? this.currentPttSpeaker : null);
+    if (speaker === 'partner') {
+      return {
+        userText: textB,      // 상대방이 말했으므로 번역된 textB가 한국어(userText)
+        partnerText: textA,   // 상대방 영어 원문
+        speaker: 'partner'
+      };
+    }
+    if (speaker === 'user') {
+      return {
+        userText: textA,      // 내가 말했으므로 입력 textA가 한국어(userText)
+        partnerText: textB,   // 영어 번역문
+        speaker: 'user'
+      };
+    }
+
+    // 2. 자동 감지(핸즈프리) 모드: 언어 특성 분석
+    const aIsUser = this.isTextInLang(textA, this.userLang);
+    const bIsUser = this.isTextInLang(textB, this.userLang);
+    const aIsPartner = this.isTextInLang(textA, this.partnerLang);
+    const bIsPartner = this.isTextInLang(textB, this.partnerLang);
+
+    if (aIsUser && !bIsUser) {
+      return { userText: textA, partnerText: textB, speaker: 'user' };
+    }
+    if (bIsUser && !aIsUser) {
+      return { userText: textB, partnerText: textA, speaker: 'partner' };
+    }
+    if (aIsPartner && bIsUser) {
+      return { userText: textB, partnerText: textA, speaker: 'partner' };
+    }
+    if (bIsPartner && aIsUser) {
+      return { userText: textA, partnerText: textB, speaker: 'user' };
+    }
+
+    // 3. 한쪽만 텍스트가 도착한 경우 (실시간 자막 스트리밍 중)
+    if (textA && !textB) {
+      if (aIsUser) {
+        return { userText: textA, partnerText: '', speaker: 'user' };
+      } else if (aIsPartner) {
+        return { userText: '', partnerText: textA, speaker: 'partner' };
+      }
+      return { userText: textA, partnerText: '', speaker: 'user' };
+    }
+
+    if (!textA && textB) {
+      if (bIsUser) {
+        return { userText: textB, partnerText: '', speaker: 'partner' };
+      } else if (bIsPartner) {
+        return { userText: '', partnerText: textB, speaker: 'user' };
+      }
+      return { userText: '', partnerText: textB, speaker: 'user' };
+    }
+
+    return { userText: textA, partnerText: textB, speaker: 'user' };
+  }
+
   renderLiveTranscript() {
-    if (this.currentInputText) {
-      if (this.userInputText) this.userInputText.textContent = this.currentInputText;
-      if (this.partnerInputText) this.partnerInputText.textContent = this.currentInputText;
-    }
-    if (this.currentOutputText) {
-      if (this.userOutputText) this.userOutputText.textContent = this.currentOutputText;
-      if (this.partnerOutputText) this.partnerOutputText.textContent = this.currentOutputText;
-    }
+    const { userText, partnerText } = this.splitLanguages(this.currentInputText, this.currentOutputText);
+
+    // 1. User View (하단: 나) -> 언제나 내 언어(userText)가 크고, 상대방 언어(partnerText)가 작게
+    if (this.userPrimaryText) this.userPrimaryText.textContent = userText;
+    if (this.userSecondaryText) this.userSecondaryText.textContent = partnerText;
+
+    // 2. Partner View (상단: 상대방) -> 언제나 상대방 언어(partnerText)가 크고, 내 언어(userText)가 작게
+    if (this.partnerPrimaryText) this.partnerPrimaryText.textContent = partnerText;
+    if (this.partnerSecondaryText) this.partnerSecondaryText.textContent = userText;
+
     if (this.userChatLog) {
       const p = this.userChatLog.closest('.transcript-display');
       if (p) p.scrollTop = p.scrollHeight;
@@ -1262,17 +1373,30 @@ Do not include markdown code block quotes. Output pure JSON only.`;
   flushCurrentTurnToHistory() {
     if (!this.currentInputText && !this.currentOutputText) return;
 
+    const { userText, partnerText, speaker } = this.splitLanguages(
+      this.currentInputText.trim(),
+      this.currentOutputText.trim()
+    );
+
+    const srcCode = speaker === 'partner' ? this.partnerLang : this.userLang;
+    const tgtCode = speaker === 'partner' ? this.userLang : this.partnerLang;
+    const srcLangObj = SUPPORTED_LANGUAGES.find(l => l.code === srcCode);
+    const tgtLangObj = SUPPORTED_LANGUAGES.find(l => l.code === tgtCode);
+
     const item = {
       id: Date.now(),
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
       original: this.currentInputText.trim(),
       translated: this.currentOutputText.trim(),
-      fromLang: this.userLang,
-      toLang: this.partnerLang
+      userText,
+      partnerText,
+      speaker, // 'user' | 'partner'
+      fromLang: srcLangObj ? srcLangObj.name : srcCode,
+      toLang: tgtLangObj ? tgtLangObj.name : tgtCode
     };
 
     if (item.original || item.translated) {
-      // 1. 화면에 대화 카드 추가 (화면에 대화가 계속 유지됨)
+      // 1. 화면에 대화 카드 추가
       this.currentSessionTurns.push(item);
       this.appendTurnToChatLog(item);
       this.appendFeedBubble(item);
@@ -1286,30 +1410,31 @@ Do not include markdown code block quotes. Output pure JSON only.`;
     this.currentInputText = '';
     this.currentOutputText = '';
 
-    // 실시간 자막 비우기 (대화 카드는 화면에 계속 유지되고, 자막 공간만 다음 발화를 위해 정리)
-    if (this.userInputText) this.userInputText.textContent = '';
-    if (this.userOutputText) this.userOutputText.textContent = '';
-    if (this.partnerInputText) this.partnerInputText.textContent = '';
-    if (this.partnerOutputText) this.partnerOutputText.textContent = '';
+    // 실시간 자막 비우기
+    if (this.userPrimaryText) this.userPrimaryText.textContent = '';
+    if (this.userSecondaryText) this.userSecondaryText.textContent = '';
+    if (this.partnerPrimaryText) this.partnerPrimaryText.textContent = '';
+    if (this.partnerSecondaryText) this.partnerSecondaryText.textContent = '';
   }
 
   appendTurnToChatLog(item) {
-    if (!item.original && !item.translated) return;
+    const userText = item.userText || (item.speaker === 'partner' ? item.translated : item.original);
+    const partnerText = item.partnerText || (item.speaker === 'partner' ? item.original : item.translated);
 
-    const transText = item.translated || item.original;
-    const origText = item.original || '';
+    if (!userText && !partnerText) return;
 
-    // 1. User View 대화 카드 (나의 화면에 누적)
+    // 1. User View 대화 카드 (나의 화면: 한국어가 크게, 영어가 밑에 작게)
     if (this.userChatLog) {
       const userCard = document.createElement('div');
       userCard.className = 'chat-turn-card';
+      const speakerBadge = item.speaker === 'partner' ? '👤 상대방' : '🗣️ 나';
       userCard.innerHTML = `
         <div class="card-header">
-          <span>${item.time}</span>
-          <span style="color:var(--accent-cyan); font-weight:700;">${item.fromLang} ➔ ${item.toLang}</span>
+          <span>${item.time} &middot; <strong style="color:var(--accent-cyan); font-weight:700;">${speakerBadge}</strong></span>
+          <span style="color:var(--text-muted);">${item.fromLang} ➔ ${item.toLang}</span>
         </div>
-        <div class="card-trans">${this.escapeHtml(transText)}</div>
-        ${origText && origText !== transText ? `<div class="card-orig">원문: ${this.escapeHtml(origText)}</div>` : ''}
+        <div class="card-trans">${this.escapeHtml(userText)}</div>
+        ${partnerText && partnerText !== userText ? `<div class="card-orig">${this.escapeHtml(partnerText)}</div>` : ''}
       `;
       this.userChatLog.appendChild(userCard);
 
@@ -1321,17 +1446,18 @@ Do not include markdown code block quotes. Output pure JSON only.`;
       }
     }
 
-    // 2. Partner View 대화 카드 (상대방 화면에 누적: 180도 회전 구역)
+    // 2. Partner View 대화 카드 (상대방 화면: 영어가 크게, 한국어가 밑에 작게)
     if (this.partnerChatLog) {
       const partnerCard = document.createElement('div');
       partnerCard.className = 'chat-turn-card partner-card';
+      const speakerBadge = item.speaker === 'partner' ? '🗣️ 나 (You)' : '👤 상대방 (Guest)';
       partnerCard.innerHTML = `
         <div class="card-header">
-          <span>${item.time}</span>
-          <span style="color:#a78bfa; font-weight:700;">${item.fromLang} ➔ ${item.toLang}</span>
+          <span>${item.time} &middot; <strong style="color:#a78bfa; font-weight:700;">${speakerBadge}</strong></span>
+          <span style="color:var(--text-muted);">${item.fromLang} ➔ ${item.toLang}</span>
         </div>
-        <div class="card-trans">${this.escapeHtml(transText)}</div>
-        ${origText && origText !== transText ? `<div class="card-orig">Original: ${this.escapeHtml(origText)}</div>` : ''}
+        <div class="card-trans">${this.escapeHtml(partnerText)}</div>
+        ${userText && userText !== partnerText ? `<div class="card-orig">${this.escapeHtml(userText)}</div>` : ''}
       `;
       this.partnerChatLog.appendChild(partnerCard);
 
