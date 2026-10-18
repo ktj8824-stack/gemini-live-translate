@@ -65,18 +65,23 @@ class ViewController: UIViewController, WKUIDelegate, WKNavigationDelegate {
     }
 
     private func loadLocalWebApp() {
-        guard let wwwPath = Bundle.main.path(forResource: "www", ofType: nil) else {
-            print("[Error] 'www' folder not found in main bundle!")
-            return
-        }
+        // Clear WKWebsiteDataStore cache to ensure newest bundle assets are always loaded
+        let websiteDataTypes = WKWebsiteDataStore.allWebsiteDataTypes()
+        WKWebsiteDataStore.default().removeData(ofTypes: websiteDataTypes, modifiedSince: Date.distantPast) { [weak self] in
+            guard let self = self else { return }
+            guard let wwwPath = Bundle.main.path(forResource: "www", ofType: nil) else {
+                print("[Error] 'www' folder not found in main bundle!")
+                return
+            }
 
-        let wwwURL = URL(fileURLWithPath: wwwPath)
-        let indexURL = wwwURL.appendingPathComponent("index.html")
+            let wwwURL = URL(fileURLWithPath: wwwPath)
+            let indexURL = wwwURL.appendingPathComponent("index.html")
 
-        if FileManager.default.fileExists(atPath: indexURL.path) {
-            webView.loadFileURL(indexURL, allowingReadAccessTo: wwwURL)
-        } else {
-            print("[Error] index.html not found at \(indexURL.path)")
+            if FileManager.default.fileExists(atPath: indexURL.path) {
+                self.webView.loadFileURL(indexURL, allowingReadAccessTo: wwwURL)
+            } else {
+                print("[Error] index.html not found at \(indexURL.path)")
+            }
         }
     }
 
