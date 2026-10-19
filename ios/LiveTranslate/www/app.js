@@ -114,6 +114,7 @@ class LiveTranslatorApp {
     this.updateSpeechModeUI();
     this.bindEvents();
     this.checkApiKey();
+    this.initAuthService();
   }
 
   initElements() {
@@ -208,6 +209,40 @@ class LiveTranslatorApp {
     // New Conversation (Clear Chat) buttons
     this.btnClearChat = document.getElementById('btn-clear-chat');
     this.btnSoloClear = document.getElementById('btn-solo-clear');
+
+    // Auth & Cloud Sync elements
+    this.btnAuthToggle = document.getElementById('btn-auth-toggle');
+    this.authModal = document.getElementById('auth-modal');
+    this.btnCloseAuth = document.getElementById('btn-close-auth');
+    this.authAvatar = document.getElementById('auth-avatar');
+    this.authUserLabel = document.getElementById('auth-user-label');
+    this.authSyncDot = document.getElementById('auth-sync-dot');
+
+    this.authGuestView = document.getElementById('auth-guest-view');
+    this.authProfileView = document.getElementById('auth-profile-view');
+    this.tabLogin = document.getElementById('tab-login');
+    this.tabSignup = document.getElementById('tab-signup');
+    this.btnGoogleLogin = document.getElementById('btn-google-login');
+    this.formLogin = document.getElementById('form-login');
+    this.formSignup = document.getElementById('form-signup');
+    this.loginEmail = document.getElementById('login-email');
+    this.loginPassword = document.getElementById('login-password');
+    this.signupName = document.getElementById('signup-name');
+    this.signupEmail = document.getElementById('signup-email');
+    this.signupPassword = document.getElementById('signup-password');
+    this.loginErrorMsg = document.getElementById('login-error-msg');
+    this.signupErrorMsg = document.getElementById('signup-error-msg');
+
+    this.profileAvatar = document.getElementById('profile-avatar');
+    this.profileName = document.getElementById('profile-name');
+    this.profileEmail = document.getElementById('profile-email');
+    this.profileProviderBadge = document.getElementById('profile-provider-badge');
+    this.syncStatusText = document.getElementById('sync-status-text');
+    this.btnManualSync = document.getElementById('btn-manual-sync');
+    this.firebaseConfigInput = document.getElementById('firebase-config-input');
+    this.btnSaveFirebaseConfig = document.getElementById('btn-save-firebase-config');
+    this.btnResetFirebaseConfig = document.getElementById('btn-reset-firebase-config');
+    this.btnLogout = document.getElementById('btn-logout');
   }
 
   populateLanguageOptions() {
@@ -395,6 +430,237 @@ class LiveTranslatorApp {
         this.saveCurrentSessionToHistory('app_background');
       }
     });
+
+    // Auth & Cloud Sync Modal Events
+    this.btnAuthToggle?.addEventListener('click', () => this.toggleAuthModal());
+    this.btnCloseAuth?.addEventListener('click', () => this.toggleAuthModal(false));
+    this.authModal?.addEventListener('click', (e) => {
+      if (e.target === this.authModal) this.toggleAuthModal(false);
+    });
+
+    this.tabLogin?.addEventListener('click', () => this.switchAuthTab('login'));
+    this.tabSignup?.addEventListener('click', () => this.switchAuthTab('signup'));
+
+    this.btnGoogleLogin?.addEventListener('click', () => this.handleGoogleLogin());
+    this.formLogin?.addEventListener('submit', (e) => this.handleEmailLogin(e));
+    this.formSignup?.addEventListener('submit', (e) => this.handleEmailSignup(e));
+
+    this.btnManualSync?.addEventListener('click', () => this.handleManualSync());
+    this.btnSaveFirebaseConfig?.addEventListener('click', () => this.handleSaveFirebaseConfig());
+    this.btnResetFirebaseConfig?.addEventListener('click', () => this.handleResetFirebaseConfig());
+    this.btnLogout?.addEventListener('click', () => this.handleLogout());
+  }
+
+  // =========================================================================
+  // Authentication & Cloud Sync Methods
+  // =========================================================================
+
+  initAuthService() {
+    if (!window.AuthService) {
+      console.warn('AuthService class not found on window');
+      return;
+    }
+
+    this.authService = new window.AuthService({
+      onAuthStateChanged: (user) => this.onAuthStateChanged(user),
+      onSyncStatusChanged: (status) => this.onSyncStatusChanged(status),
+      onDebugLog: (msg) => this.addDebugLog(msg)
+    });
+
+    if (this.firebaseConfigInput && this.authService.firebaseConfig) {
+      this.firebaseConfigInput.value = JSON.stringify(this.authService.firebaseConfig, null, 2);
+    }
+  }
+
+  onAuthStateChanged(user) {
+    if (user) {
+      const displayName = user.displayName || user.email.split('@')[0];
+      if (this.authUserLabel) this.authUserLabel.textContent = displayName;
+
+      if (this.authAvatar) {
+        if (user.photoURL) {
+          this.authAvatar.innerHTML = `<img src="${user.photoURL}" alt="${displayName}">`;
+        } else {
+          this.authAvatar.textContent = displayName.charAt(0).toUpperCase();
+        }
+      }
+
+      this.authGuestView?.classList.add('hidden');
+      this.authProfileView?.classList.remove('hidden');
+
+      if (this.profileName) this.profileName.textContent = displayName;
+      if (this.profileEmail) this.profileEmail.textContent = user.email;
+      if (this.profileAvatar) {
+        if (user.photoURL) {
+          this.profileAvatar.innerHTML = `<img src="${user.photoURL}" alt="${displayName}">`;
+        } else {
+          this.profileAvatar.textContent = displayName.charAt(0).toUpperCase();
+        }
+      }
+      if (this.profileProviderBadge) {
+        const provMap = { 'google.com': 'Google 계정', 'password': '이메일 계정', 'local': '로컬 계정', 'google_demo': '체험 계정' };
+        this.profileProviderBadge.textContent = provMap[user.provider] || user.provider;
+      }
+
+      this.learnedRules = JSON.parse(localStorage.getItem('gemini_learned_rules') || '[]');
+      this.conversationContextSummary = localStorage.getItem('gemini_context_summary') || '';
+      this.renderLearnedRules();
+      this.renderHistory();
+      this.addDebugLog(`[Auth] 계정 로그인 활성화: ${user.email}`);
+    } else {
+      if (this.authUserLabel) this.authUserLabel.textContent = '로그인';
+      if (this.authAvatar) {
+        this.authAvatar.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>';
+      }
+      this.authGuestView?.classList.remove('hidden');
+      this.authProfileView?.classList.add('hidden');
+      if (this.authSyncDot) this.authSyncDot.className = 'sync-dot';
+      this.addDebugLog('[Auth] 게스트 모드 (로그아웃됨)');
+    }
+  }
+
+  onSyncStatusChanged(status) {
+    if (this.authSyncDot) {
+      this.authSyncDot.className = `sync-dot ${status}`;
+    }
+    if (this.syncStatusText) {
+      this.syncStatusText.className = `sync-badge ${status}`;
+      if (status === 'synced') {
+        this.syncStatusText.textContent = '동기화 완료';
+      } else if (status === 'syncing') {
+        this.syncStatusText.textContent = '동기화 중...';
+      } else if (status === 'error') {
+        this.syncStatusText.textContent = '동기화 오류';
+      }
+    }
+  }
+
+  toggleAuthModal(forceState) {
+    if (!this.authModal) return;
+    const isHidden = this.authModal.classList.contains('hidden');
+    const shouldOpen = forceState !== undefined ? forceState : isHidden;
+
+    if (shouldOpen) {
+      this.authModal.classList.remove('hidden');
+      if (this.loginErrorMsg) this.loginErrorMsg.classList.add('hidden');
+      if (this.signupErrorMsg) this.signupErrorMsg.classList.add('hidden');
+    } else {
+      this.authModal.classList.add('hidden');
+    }
+  }
+
+  switchAuthTab(tab) {
+    if (tab === 'login') {
+      this.tabLogin?.classList.add('active');
+      this.tabSignup?.classList.remove('active');
+      this.formLogin?.classList.remove('hidden');
+      this.formSignup?.classList.add('hidden');
+    } else {
+      this.tabSignup?.classList.add('active');
+      this.tabLogin?.classList.remove('active');
+      this.formSignup?.classList.remove('hidden');
+      this.formLogin?.classList.add('hidden');
+    }
+  }
+
+  async handleGoogleLogin() {
+    try {
+      if (!this.authService) return;
+      this.addDebugLog('[Auth] Google 로그인 시도...');
+      const res = await this.authService.signInWithGoogle();
+      if (res && res.success) {
+        this.toggleAuthModal(false);
+      }
+    } catch (err) {
+      alert(`Google 로그인 실패: ${err.message}`);
+    }
+  }
+
+  async handleEmailLogin(e) {
+    e.preventDefault();
+    if (!this.authService) return;
+    const email = this.loginEmail?.value;
+    const pw = this.loginPassword?.value;
+    if (this.loginErrorMsg) this.loginErrorMsg.classList.add('hidden');
+
+    try {
+      await this.authService.signInWithEmail(email, pw);
+      if (this.formLogin) this.formLogin.reset();
+      this.toggleAuthModal(false);
+    } catch (err) {
+      if (this.loginErrorMsg) {
+        this.loginErrorMsg.textContent = err.message;
+        this.loginErrorMsg.classList.remove('hidden');
+      } else {
+        alert(err.message);
+      }
+    }
+  }
+
+  async handleEmailSignup(e) {
+    e.preventDefault();
+    if (!this.authService) return;
+    const name = this.signupName?.value;
+    const email = this.signupEmail?.value;
+    const pw = this.signupPassword?.value;
+    if (this.signupErrorMsg) this.signupErrorMsg.classList.add('hidden');
+
+    try {
+      await this.authService.signUpWithEmail(email, pw, name);
+      if (this.formSignup) this.formSignup.reset();
+      this.toggleAuthModal(false);
+    } catch (err) {
+      if (this.signupErrorMsg) {
+        this.signupErrorMsg.textContent = err.message;
+        this.signupErrorMsg.classList.remove('hidden');
+      } else {
+        alert(err.message);
+      }
+    }
+  }
+
+  async handleManualSync() {
+    if (!this.authService) return;
+    this.addDebugLog('[Auth] 수동 동기화 요청...');
+    await this.authService.syncToCloud();
+    await this.authService.syncFromCloud();
+    this.learnedRules = JSON.parse(localStorage.getItem('gemini_learned_rules') || '[]');
+    this.renderLearnedRules();
+    this.renderHistory();
+  }
+
+  handleSaveFirebaseConfig() {
+    if (!this.authService) return;
+    const val = this.firebaseConfigInput?.value.trim();
+    if (!val) {
+      this.authService.saveFirebaseConfig(null);
+      alert('Firebase 설정이 초기화되었습니다. 로컬 모드로 동작합니다.');
+      return;
+    }
+    try {
+      const parsed = JSON.parse(val);
+      this.authService.saveFirebaseConfig(parsed);
+      alert('Firebase 설정이 저장되었습니다! 클라우드 연동을 시작합니다.');
+    } catch (e) {
+      alert('올바른 JSON 형식의 Firebase 설정 객체를 입력해주세요.');
+    }
+  }
+
+  handleResetFirebaseConfig() {
+    if (!this.authService) return;
+    if (confirm('Firebase 설정을 초기화하고 로컬 모드로 전환하시겠습니까?')) {
+      this.authService.saveFirebaseConfig(null);
+      if (this.firebaseConfigInput) this.firebaseConfigInput.value = '';
+      alert('초기화되었습니다.');
+    }
+  }
+
+  async handleLogout() {
+    if (!this.authService) return;
+    if (confirm('로그아웃 하시겠습니까?')) {
+      await this.authService.signOut();
+      this.toggleAuthModal(false);
+    }
   }
 
   saveCurrentSessionToHistory(reason = 'manual') {
@@ -435,6 +701,9 @@ class LiveTranslatorApp {
     this.history.unshift(sessionItem);
     localStorage.setItem('gemini_chat_history', JSON.stringify(this.history));
     this.renderHistory();
+
+    // 로그인 상태일 시 클라우드 자동 동기화
+    this.authService?.syncToCloud();
 
     this.currentSessionTurns = [];
     this.addDebugLog(`[히스토리 보관] 대화 ${turnsCount}건이 단 1개의 완성된 세션 카드로 히스토리에 저장되었습니다. (사유: ${reason})`);
@@ -832,12 +1101,14 @@ class LiveTranslatorApp {
 
     this.renderLearnedRules();
     this.addDebugLog(`[AI Memory] New rule learned: "${src}" -> "${tgt}"`);
+    this.authService?.syncToCloud();
   }
 
   deleteDictionaryRule(src) {
     this.learnedRules = this.learnedRules.filter(r => r.src !== src);
     localStorage.setItem('gemini_learned_rules', JSON.stringify(this.learnedRules));
     this.renderLearnedRules();
+    this.authService?.syncToCloud();
   }
 
   renderLearnedRules() {
