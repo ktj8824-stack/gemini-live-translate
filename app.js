@@ -65,12 +65,8 @@ class LiveTranslatorApp {
     this.speechMode = localStorage.getItem('gemini_speech_mode') || 'handsfree'; // 'handsfree' | 'ptt'
     
     // [자동 감지 (Handsfree) 전용 설정 및 상태]
-    let savedPause = localStorage.getItem('gemini_pause_tolerance');
-    if (!savedPause || savedPause === '2000' || savedPause === '1500' || savedPause === '800') {
-      savedPause = '500';
-      localStorage.setItem('gemini_pause_tolerance', '500');
-    }
-    this.pauseTolerance = parseInt(savedPause, 10);
+    const savedPause = localStorage.getItem('gemini_pause_tolerance');
+    this.pauseTolerance = savedPause ? (parseInt(savedPause, 10) || 800) : 800;
     this.smartGuard = localStorage.getItem('gemini_smart_guard') !== 'false'; // 기본 true (문장 끝난 후 깨끗하게 통역 음성 출력)
     this.handsfreeSilenceTimer = null;
     this.isHandsfreeSpeaking = false;
@@ -358,6 +354,12 @@ class LiveTranslatorApp {
       this.pauseTolerance = parseInt(e.target.value, 10);
       localStorage.setItem('gemini_pause_tolerance', String(this.pauseTolerance));
       this.addDebugLog(`[Settings] 발화 멈춤 대기 시간 설정: ${this.pauseTolerance}ms`);
+      if (this.handsfreeSilenceTimer) {
+        clearTimeout(this.handsfreeSilenceTimer);
+        this.handsfreeSilenceTimer = setTimeout(() => {
+          this.onHandsfreeSpeechEnded();
+        }, this.pauseTolerance);
+      }
     });
 
     this.settingSmartGuard?.addEventListener('change', (e) => {
@@ -1337,14 +1339,15 @@ Do not include markdown code block quotes. Output pure JSON only.`;
           this.finishPttTurn();
         }
       } else {
-        // [자동 감지 모드] 스마트 긴 문장 보호가 켜져 있고 아직 말하고 있다면 보류
-        if (this.smartGuard && this.isHandsfreeSpeaking) {
+        // [자동 감지 모드] 아직 말하고 있거나 발화 멈춤 대기 시간(pauseTolerance) 타이머가 진행 중이라면 보류
+        if (this.isHandsfreeSpeaking || this.handsfreeSilenceTimer) {
           this.turnCompleteReceivedDuringTail = true;
+          this.addDebugLog(`[Turn Complete] 발화 멈춤 대기 중 (${this.pauseTolerance}ms 타이머 진행 중) -> 마감 보류`);
         } else {
           const remainingSec = this.audioStreamer ? this.audioStreamer.getRemainingPlaybackTime() : 0;
           const waitMs = Math.max(60, Math.round(remainingSec * 1000) + 80);
           setTimeout(() => {
-            if (this.speechMode === 'handsfree') {
+            if (this.speechMode === 'handsfree' && !this.isHandsfreeSpeaking && !this.handsfreeSilenceTimer) {
               this.flushCurrentTurnToHistory();
             }
           }, waitMs);
