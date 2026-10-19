@@ -22,8 +22,17 @@
       this.localUserKey = 'gemini_auth_user';
       this.firebaseConfigKey = 'gemini_firebase_config';
       this.kakaoAppKeyStorage = 'gemini_kakao_app_key';
+      this.kakaoMasterAppKey = 'aa3ed4bdeb8db39117fcd008c756acb7';
 
-      this.kakaoAppKey = localStorage.getItem(this.kakaoAppKeyStorage) || 'aa3ed4bdeb8db39117fcd008c756acb7';
+      // 32자리 16진수 앱 키인지 검증 (URL이나 임의 텍스트가 저장되어 있을 경우 마스터 키로 자동 정정)
+      const storedKakaoKey = localStorage.getItem(this.kakaoAppKeyStorage);
+      if (!storedKakaoKey || !/^[0-9a-fA-F]{32}$/.test(storedKakaoKey.trim())) {
+        this.kakaoAppKey = this.kakaoMasterAppKey;
+        localStorage.setItem(this.kakaoAppKeyStorage, this.kakaoMasterAppKey);
+      } else {
+        this.kakaoAppKey = storedKakaoKey.trim();
+      }
+
       this.firebaseConfig = this.loadFirebaseConfig();
       this.init();
     }
@@ -207,35 +216,35 @@
         throw new Error('카카오 SDK가 아직 준비되지 않았습니다. 잠시 후 다시 시도해주세요.');
       }
 
-      // 2. 카카오 JavaScript 앱 키 확보
+      // 2. 카카오 JavaScript 앱 키 확보 및 32자리 유효성 검증
       let appKey = this.kakaoAppKey || localStorage.getItem(this.kakaoAppKeyStorage);
-      if (!appKey) {
-        const inputKey = prompt(
-          '🟡 [카카오 실제 로그인 연동]\n카카오 개발자센터(developers.kakao.com)에서 발급받은 JavaScript 키를 입력해주세요:\n(키를 등록하시면 실제 카카오 계정 로그인/약관동의 창이 즉시 실행됩니다)',
-          ''
-        );
-        if (!inputKey || !inputKey.trim()) {
-          throw new Error('카카오 JavaScript 키가 입력되지 않아 로그인을 취소했습니다.');
-        }
-        appKey = inputKey.trim();
+      if (!appKey || !/^[0-9a-fA-F]{32}$/.test(appKey.trim())) {
+        appKey = this.kakaoMasterAppKey;
         this.saveKakaoAppKey(appKey);
       }
+      appKey = appKey.trim();
 
-      // 3. 카카오 SDK 초기화
-      if (!window.Kakao.isInitialized()) {
+      // 3. 카카오 SDK 초기화 (기존 잘못 초기화되었을 수 있는 인스턴스를 완전 초기화 후 정식 키 적용)
+      if (window.Kakao.isInitialized()) {
         try {
-          window.Kakao.init(appKey);
+          if (typeof window.Kakao.cleanup === 'function') {
+            window.Kakao.cleanup();
+          }
         } catch (e) {
-          console.warn('Kakao init error:', e);
+          console.warn('Kakao cleanup error:', e);
         }
       }
+      try {
+        window.Kakao.init(appKey);
+      } catch (e) {
+        console.warn('Kakao init error:', e);
+      }
 
-      this.log('실제 카카오 로그인 팝업 창을 호출합니다...');
+      this.log(`실제 카카오 로그인 팝업 창 호출 (AppKey: ${appKey.substring(0, 6)}...)...`);
 
-      // 4. 공식 Kakao.Auth.login 호출 -> 사용자 카카오 계정 인증 및 동의창
+      // 4. 공식 Kakao.Auth.login 호출 (scope 생략하여 개발자센터 기본 동의항목에 맞춤)
       return new Promise((resolve, reject) => {
         window.Kakao.Auth.login({
-          scope: 'profile_nickname,account_email',
           success: (authObj) => {
             this.log('카카오 인증 토큰 수신 완료! 사용자 프로필 조회 중...');
 
