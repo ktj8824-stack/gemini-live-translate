@@ -23,7 +23,7 @@
       this.firebaseConfigKey = 'gemini_firebase_config';
       this.kakaoAppKeyStorage = 'gemini_kakao_app_key';
 
-      this.kakaoAppKey = localStorage.getItem(this.kakaoAppKeyStorage) || '';
+      this.kakaoAppKey = localStorage.getItem(this.kakaoAppKeyStorage) || 'aa3ed4bdeb8db39117fcd008c756acb7';
       this.firebaseConfig = this.loadFirebaseConfig();
       this.init();
     }
