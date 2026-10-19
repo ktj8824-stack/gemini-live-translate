@@ -22,11 +22,11 @@
       this.localUserKey = 'gemini_auth_user';
       this.firebaseConfigKey = 'gemini_firebase_config';
       this.kakaoAppKeyStorage = 'gemini_kakao_app_key';
-      this.kakaoMasterAppKey = 'aa3ed4bdeb8db39117fcd008c756acb7';
+      this.kakaoMasterAppKey = 'aa3ed4bdeb8db39117fcd006c756acb7';
 
-      // 32자리 16진수 앱 키인지 검증 (URL이나 임의 텍스트가 저장되어 있을 경우 마스터 키로 자동 정정)
+      // 32자리 16진수 앱 키인지 검증 (구버전 오타 키나 URL 등일 경우 정식 마스터 키로 자동 교정)
       const storedKakaoKey = localStorage.getItem(this.kakaoAppKeyStorage);
-      if (!storedKakaoKey || !/^[0-9a-fA-F]{32}$/.test(storedKakaoKey.trim())) {
+      if (!storedKakaoKey || storedKakaoKey === 'aa3ed4bdeb8db39117fcd008c756acb7' || !/^[0-9a-fA-F]{32}$/.test(storedKakaoKey.trim())) {
         this.kakaoAppKey = this.kakaoMasterAppKey;
         localStorage.setItem(this.kakaoAppKeyStorage, this.kakaoMasterAppKey);
       } else {
