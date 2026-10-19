@@ -21,7 +21,9 @@
 
       this.localUserKey = 'gemini_auth_user';
       this.firebaseConfigKey = 'gemini_firebase_config';
+      this.kakaoAppKeyStorage = 'gemini_kakao_app_key';
 
+      this.kakaoAppKey = localStorage.getItem(this.kakaoAppKeyStorage) || '';
       this.firebaseConfig = this.loadFirebaseConfig();
       this.init();
     }
@@ -29,6 +31,24 @@
     log(msg) {
       if (this.onDebugLog) this.onDebugLog(`[Auth] ${msg}`);
       console.log(`[AuthService] ${msg}`);
+    }
+
+    saveKakaoAppKey(key) {
+      if (!key) {
+        localStorage.removeItem(this.kakaoAppKeyStorage);
+        this.kakaoAppKey = '';
+      } else {
+        localStorage.setItem(this.kakaoAppKeyStorage, key.trim());
+        this.kakaoAppKey = key.trim();
+        if (window.Kakao && !window.Kakao.isInitialized()) {
+          try {
+            window.Kakao.init(this.kakaoAppKey);
+          } catch (e) {
+            console.warn('Kakao init error', e);
+          }
+        }
+      }
+      this.log(`카카오 앱 키 저장: ${this.kakaoAppKey ? '등록 완료' : '초기화'}`);
     }
 
     loadFirebaseConfig() {
@@ -180,27 +200,84 @@
       }
     }
 
-    // Kakao 소셜 로그인
+    // Kakao 실제 소셜 로그인 및 회원가입
     async signInWithKakao() {
-      try {
-        this.log('카카오 로그인 요청 처리 중...');
-        // 카카오 로그인 계정 객체 생성
-        const mockUser = {
-          uid: 'kakao_' + Date.now().toString(36) + Math.random().toString(36).substr(2, 4),
-          email: 'kakao_user@talktranslate.com',
-          displayName: '카카오 사용자',
-          photoURL: null,
-          provider: 'kakao',
-          lastLogin: Date.now()
-        };
-        this.saveCachedUser(mockUser);
-        this.log(`카카오 로그인 성공: ${mockUser.displayName}`);
-        await this.syncFromCloud();
-        return { success: true, user: mockUser };
-      } catch (err) {
-        this.log(`카카오 로그인 에러: ${err.message}`);
-        throw err;
+      // 1. 카카오 공식 SDK 로드 여부 검사
+      if (!window.Kakao) {
+        throw new Error('카카오 SDK가 아직 준비되지 않았습니다. 잠시 후 다시 시도해주세요.');
       }
+
+      // 2. 카카오 JavaScript 앱 키 확보
+      let appKey = this.kakaoAppKey || localStorage.getItem(this.kakaoAppKeyStorage);
+      if (!appKey) {
+        const inputKey = prompt(
+          '🟡 [카카오 실제 로그인 연동]\n카카오 개발자센터(developers.kakao.com)에서 발급받은 JavaScript 키를 입력해주세요:\n(키를 등록하시면 실제 카카오 계정 로그인/약관동의 창이 즉시 실행됩니다)',
+          ''
+        );
+        if (!inputKey || !inputKey.trim()) {
+          throw new Error('카카오 JavaScript 키가 입력되지 않아 로그인을 취소했습니다.');
+        }
+        appKey = inputKey.trim();
+        this.saveKakaoAppKey(appKey);
+      }
+
+      // 3. 카카오 SDK 초기화
+      if (!window.Kakao.isInitialized()) {
+        try {
+          window.Kakao.init(appKey);
+        } catch (e) {
+          console.warn('Kakao init error:', e);
+        }
+      }
+
+      this.log('실제 카카오 로그인 팝업 창을 호출합니다...');
+
+      // 4. 공식 Kakao.Auth.login 호출 -> 사용자 카카오 계정 인증 및 동의창
+      return new Promise((resolve, reject) => {
+        window.Kakao.Auth.login({
+          scope: 'profile_nickname,account_email',
+          success: (authObj) => {
+            this.log('카카오 인증 토큰 수신 완료! 사용자 프로필 조회 중...');
+
+            // 5. 실제 사용자 계정 정보(닉네임, 이메일, 프로필 이미지) 조회
+            window.Kakao.API.request({
+              url: '/v2/user/me',
+              success: async (res) => {
+                const kakaoAccount = res.kakao_account || {};
+                const profile = kakaoAccount.profile || {};
+                const email = kakaoAccount.email || `kakao_${res.id}@kakao.user`;
+                const displayName = profile.nickname || '카카오 사용자';
+                const photoURL = profile.profile_image_url || null;
+
+                const userObj = {
+                  uid: `kakao_${res.id}`,
+                  email,
+                  displayName,
+                  photoURL,
+                  provider: 'kakao',
+                  accessToken: authObj.access_token,
+                  lastLogin: Date.now()
+                };
+
+                this.saveCachedUser(userObj);
+                this.log(`실제 카카오 로그인 성공: ${displayName} (${email})`);
+                await this.syncFromCloud();
+                resolve({ success: true, user: userObj });
+              },
+              fail: (err) => {
+                const errMsg = err?.msg || '카카오 사용자 정보를 가져오지 못했습니다.';
+                this.log(`카카오 사용자 정보 조회 실패: ${errMsg}`);
+                reject(new Error(errMsg));
+              }
+            });
+          },
+          fail: (err) => {
+            const errMsg = err?.error_description || err?.msg || '카카오 로그인이 취소되었거나 오류가 발생했습니다.';
+            this.log(`카카오 로그인 실패: ${errMsg}`);
+            reject(new Error(errMsg));
+          }
+        });
+      });
     }
 
     // 이메일 로그인

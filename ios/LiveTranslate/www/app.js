@@ -259,6 +259,8 @@ class LiveTranslatorApp {
     this.profileProviderBadge = document.getElementById('profile-provider-badge');
     this.syncStatusText = document.getElementById('sync-status-text');
     this.btnManualSync = document.getElementById('btn-manual-sync');
+    this.kakaoAppKeyInput = document.getElementById('kakao-app-key-input');
+    this.btnSaveKakaoKey = document.getElementById('btn-save-kakao-key');
     this.firebaseConfigInput = document.getElementById('firebase-config-input');
     this.btnSaveFirebaseConfig = document.getElementById('btn-save-firebase-config');
     this.btnResetFirebaseConfig = document.getElementById('btn-reset-firebase-config');
@@ -543,6 +545,15 @@ class LiveTranslatorApp {
     });
 
     this.btnManualSync?.addEventListener('click', () => this.handleManualSync());
+    this.btnSaveKakaoKey?.addEventListener('click', () => {
+      const key = this.kakaoAppKeyInput?.value.trim();
+      this.authService?.saveKakaoAppKey(key);
+      if (key) {
+        this.showToast('🟡 카카오 JavaScript 키가 저장되었습니다!');
+      } else {
+        this.showToast('카카오 키가 초기화되었습니다.');
+      }
+    });
     this.btnSaveFirebaseConfig?.addEventListener('click', () => this.handleSaveFirebaseConfig());
     this.btnResetFirebaseConfig?.addEventListener('click', () => this.handleResetFirebaseConfig());
     this.btnLogout?.addEventListener('click', () => this.handleLogout());
@@ -563,6 +574,10 @@ class LiveTranslatorApp {
       onSyncStatusChanged: (status) => this.onSyncStatusChanged(status),
       onDebugLog: (msg) => this.addDebugLog(msg)
     });
+
+    if (this.kakaoAppKeyInput && this.authService.kakaoAppKey) {
+      this.kakaoAppKeyInput.value = this.authService.kakaoAppKey;
+    }
 
     if (this.firebaseConfigInput && this.authService.firebaseConfig) {
       this.firebaseConfigInput.value = JSON.stringify(this.authService.firebaseConfig, null, 2);
