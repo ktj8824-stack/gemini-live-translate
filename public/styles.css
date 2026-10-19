@@ -930,8 +930,10 @@ body {
   width: 360px;
   max-width: 90vw;
   height: 100vh;
+  height: 100dvh;
   background: rgba(15, 23, 42, 0.95);
   backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
   border-left: 1px solid var(--border-color);
   z-index: 100;
   transition: right 0.3s cubic-bezier(0.16, 1, 0.3, 1);
@@ -945,16 +947,52 @@ body {
 }
 
 .drawer-header {
-  padding: 1.25rem;
+  padding-top: max(1.25rem, calc(env(safe-area-inset-top, 0px) + 0.85rem));
+  padding-bottom: 1rem;
+  padding-left: 1.25rem;
+  padding-right: 1.25rem;
   display: flex;
   align-items: center;
   justify-content: space-between;
   border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+  gap: 0.75rem;
 }
 
 .drawer-header h2 {
   font-size: 1.05rem;
   font-weight: 700;
+  margin: 0;
+  line-height: 1.3;
+}
+
+.drawer-header .icon-btn {
+  width: 38px;
+  height: 38px;
+  min-width: 38px;
+  min-height: 38px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #fff;
+  font-size: 1.15rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.drawer-header .icon-btn:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.drawer-header .icon-btn:active {
+  transform: scale(0.9);
+  background: rgba(255, 255, 255, 0.3);
 }
 
 .history-list {
@@ -1126,10 +1164,11 @@ body {
 }
 
 .drawer-footer {
-  padding: 1.25rem;
+  padding: 1rem 1.25rem max(1.25rem, calc(env(safe-area-inset-bottom, 0px) + 0.75rem));
   display: flex;
   gap: 0.75rem;
   border-top: 1px solid var(--border-color);
+  flex-shrink: 0;
 }
 
 .primary-btn, .secondary-btn {
@@ -1139,6 +1178,7 @@ body {
   font-size: 0.85rem;
   font-weight: 600;
   cursor: pointer;
+  touch-action: manipulation;
 }
 
 .primary-btn {
@@ -1159,10 +1199,12 @@ body {
   inset: 0;
   background: rgba(0, 0, 0, 0.65);
   backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 120;
+  padding: max(16px, env(safe-area-inset-top, 0px)) 16px max(16px, env(safe-area-inset-bottom, 0px));
 }
 
 .modal-overlay.hidden {
@@ -1190,6 +1232,36 @@ body {
   justify-content: space-between;
   border-bottom: 1px solid var(--border-color);
   flex-shrink: 0;
+  gap: 0.75rem;
+}
+
+.modal-header .icon-btn {
+  width: 38px;
+  height: 38px;
+  min-width: 38px;
+  min-height: 38px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #fff;
+  font-size: 1.15rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.modal-header .icon-btn:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.modal-header .icon-btn:active {
+  transform: scale(0.9);
+  background: rgba(255, 255, 255, 0.3);
 }
 
 .modal-body {
