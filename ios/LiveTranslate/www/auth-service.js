@@ -24,14 +24,9 @@
       this.kakaoAppKeyStorage = 'gemini_kakao_app_key';
       this.kakaoMasterAppKey = 'aa3ed4bdeb8db39117fcd006c756acb7';
 
-      // 32자리 16진수 앱 키인지 검증 (구버전 오타 키나 URL 등일 경우 정식 마스터 키로 자동 교정)
-      const storedKakaoKey = localStorage.getItem(this.kakaoAppKeyStorage);
-      if (!storedKakaoKey || storedKakaoKey === 'aa3ed4bdeb8db39117fcd008c756acb7' || !/^[0-9a-fA-F]{32}$/.test(storedKakaoKey.trim())) {
-        this.kakaoAppKey = this.kakaoMasterAppKey;
-        localStorage.setItem(this.kakaoAppKeyStorage, this.kakaoMasterAppKey);
-      } else {
-        this.kakaoAppKey = storedKakaoKey.trim();
-      }
+      // 검증된 정식 카카오 JavaScript 키 강제 적용 (오타/이전 캐시 완벽 방지)
+      this.kakaoAppKey = this.kakaoMasterAppKey;
+      localStorage.setItem(this.kakaoAppKeyStorage, this.kakaoMasterAppKey);
 
       this.firebaseConfig = this.loadFirebaseConfig();
       this.init();
@@ -216,13 +211,8 @@
         throw new Error('카카오 SDK가 아직 준비되지 않았습니다. 잠시 후 다시 시도해주세요.');
       }
 
-      // 2. 카카오 JavaScript 앱 키 확보 및 32자리 유효성 검증
-      let appKey = this.kakaoAppKey || localStorage.getItem(this.kakaoAppKeyStorage);
-      if (!appKey || !/^[0-9a-fA-F]{32}$/.test(appKey.trim())) {
-        appKey = this.kakaoMasterAppKey;
-        this.saveKakaoAppKey(appKey);
-      }
-      appKey = appKey.trim();
+      // 2. 카카오 정식 JavaScript 앱 키 적용
+      const appKey = this.kakaoMasterAppKey;
 
       // 3. 카카오 SDK 초기화 (기존 잘못 초기화되었을 수 있는 인스턴스를 완전 초기화 후 정식 키 적용)
       if (window.Kakao.isInitialized()) {
