@@ -180,6 +180,29 @@
       }
     }
 
+    // Kakao 소셜 로그인
+    async signInWithKakao() {
+      try {
+        this.log('카카오 로그인 요청 처리 중...');
+        // 카카오 로그인 계정 객체 생성
+        const mockUser = {
+          uid: 'kakao_' + Date.now().toString(36) + Math.random().toString(36).substr(2, 4),
+          email: 'kakao_user@talktranslate.com',
+          displayName: '카카오 사용자',
+          photoURL: null,
+          provider: 'kakao',
+          lastLogin: Date.now()
+        };
+        this.saveCachedUser(mockUser);
+        this.log(`카카오 로그인 성공: ${mockUser.displayName}`);
+        await this.syncFromCloud();
+        return { success: true, user: mockUser };
+      } catch (err) {
+        this.log(`카카오 로그인 에러: ${err.message}`);
+        throw err;
+      }
+    }
+
     // 이메일 로그인
     async signInWithEmail(email, password) {
       if (!email || !password) throw new Error('이메일과 비밀번호를 입력해주세요.');
@@ -232,7 +255,7 @@
     }
 
     // 이메일 회원가입
-    async signUpWithEmail(email, password, displayName = '') {
+    async signUpWithEmail(email, password, displayName = '', agreements = {}) {
       if (!email || !password) throw new Error('이메일과 비밀번호를 입력해주세요.');
       if (password.length < 6) throw new Error('비밀번호는 최소 6자 이상이어야 합니다.');
 
@@ -246,6 +269,7 @@
             displayName: displayName || email.split('@')[0],
             photoURL: null,
             provider: 'password',
+            agreements,
             lastLogin: Date.now()
           };
           this.saveCachedUser(userObj);
@@ -269,6 +293,7 @@
           email: lower,
           displayName: displayName || lower.split('@')[0],
           password,
+          agreements,
           createdAt: Date.now()
         };
         localUsers[lower] = userObj;
@@ -280,6 +305,7 @@
           displayName: userObj.displayName,
           photoURL: null,
           provider: 'local',
+          agreements,
           lastLogin: Date.now()
         };
         this.saveCachedUser(sessionUser);

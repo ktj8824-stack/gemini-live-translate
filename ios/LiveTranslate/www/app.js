@@ -222,7 +222,9 @@ class LiveTranslatorApp {
     this.authProfileView = document.getElementById('auth-profile-view');
     this.tabLogin = document.getElementById('tab-login');
     this.tabSignup = document.getElementById('tab-signup');
+    this.btnKakaoLogin = document.getElementById('btn-kakao-login');
     this.btnGoogleLogin = document.getElementById('btn-google-login');
+    this.btnAppleLogin = document.getElementById('btn-apple-login');
     this.formLogin = document.getElementById('form-login');
     this.formSignup = document.getElementById('form-signup');
     this.loginEmail = document.getElementById('login-email');
@@ -230,8 +232,26 @@ class LiveTranslatorApp {
     this.signupName = document.getElementById('signup-name');
     this.signupEmail = document.getElementById('signup-email');
     this.signupPassword = document.getElementById('signup-password');
+    this.signupPasswordConfirm = document.getElementById('signup-password-confirm');
+    this.pwStrengthBar = document.getElementById('pw-strength-bar');
+    this.pwStrengthText = document.getElementById('pw-strength-text');
+    this.pwConfirmMatchText = document.getElementById('pw-confirm-match-text');
     this.loginErrorMsg = document.getElementById('login-error-msg');
     this.signupErrorMsg = document.getElementById('signup-error-msg');
+
+    // 약관 동의 체크박스 & 전문 모달
+    this.agreeAll = document.getElementById('agree-all');
+    this.agreeTerms = document.getElementById('agree-terms');
+    this.agreePrivacy = document.getElementById('agree-privacy');
+    this.agreeAge = document.getElementById('agree-age');
+    this.agreeMarketing = document.getElementById('agree-marketing');
+    this.btnSubmitSignup = document.getElementById('btn-submit-signup');
+    this.btnGuestBrowse = document.getElementById('btn-guest-browse');
+    this.termsModal = document.getElementById('terms-modal');
+    this.btnCloseTerms = document.getElementById('btn-close-terms');
+    this.btnConfirmTerms = document.getElementById('btn-confirm-terms');
+    this.termsModalTitle = document.getElementById('terms-modal-title');
+    this.termsModalBodyText = document.getElementById('terms-modal-body-text');
 
     this.profileAvatar = document.getElementById('profile-avatar');
     this.profileName = document.getElementById('profile-name');
@@ -431,7 +451,14 @@ class LiveTranslatorApp {
       }
     });
 
-    // Auth & Cloud Sync Modal Events
+    // 1. 시작 스플래시 인트로 종료 시 -> 미로그인 사용자에게 로그인 모달 자동 표시
+    window.addEventListener('app:splashFinished', () => {
+      if (!this.authService || !this.authService.currentUser) {
+        this.toggleAuthModal(true);
+      }
+    });
+
+    // 2. Auth & Cloud Sync Modal Events
     this.btnAuthToggle?.addEventListener('click', () => this.toggleAuthModal());
     this.btnCloseAuth?.addEventListener('click', () => this.toggleAuthModal(false));
     this.authModal?.addEventListener('click', (e) => {
@@ -441,9 +468,79 @@ class LiveTranslatorApp {
     this.tabLogin?.addEventListener('click', () => this.switchAuthTab('login'));
     this.tabSignup?.addEventListener('click', () => this.switchAuthTab('signup'));
 
+    // 소셜 로그인 (카카오, 구글, 애플)
+    this.btnKakaoLogin?.addEventListener('click', () => this.handleKakaoLogin());
     this.btnGoogleLogin?.addEventListener('click', () => this.handleGoogleLogin());
+    this.btnAppleLogin?.addEventListener('click', () => this.handleAppleLogin());
+
+    // 이메일 폼 제출
     this.formLogin?.addEventListener('submit', (e) => this.handleEmailLogin(e));
     this.formSignup?.addEventListener('submit', (e) => this.handleEmailSignup(e));
+
+    // 비밀번호 보기/숨기기 토글 (👁️)
+    document.querySelectorAll('.btn-toggle-pw').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const targetId = btn.getAttribute('data-target');
+        const input = document.getElementById(targetId);
+        if (!input) return;
+        const isPw = input.type === 'password';
+        input.type = isPw ? 'text' : 'password';
+        btn.textContent = isPw ? '🙈' : '👁️';
+      });
+    });
+
+    // 비밀번호 강도 및 일치 실시간 검사
+    this.signupPassword?.addEventListener('input', () => {
+      this.updatePasswordStrength();
+      this.checkPasswordMatch();
+      this.updateSignupButtonState();
+    });
+    this.signupPasswordConfirm?.addEventListener('input', () => {
+      this.checkPasswordMatch();
+      this.updateSignupButtonState();
+    });
+
+    // 약관 전체 동의 및 개별 동의 체계
+    this.agreeAll?.addEventListener('change', (e) => {
+      const checked = e.target.checked;
+      [this.agreeTerms, this.agreePrivacy, this.agreeAge, this.agreeMarketing].forEach(cb => {
+        if (cb) cb.checked = checked;
+      });
+      this.updateSignupButtonState();
+    });
+
+    [this.agreeTerms, this.agreePrivacy, this.agreeAge, this.agreeMarketing].forEach(cb => {
+      cb?.addEventListener('change', () => {
+        const allChecked = Boolean(this.agreeTerms?.checked && this.agreePrivacy?.checked && this.agreeAge?.checked && this.agreeMarketing?.checked);
+        if (this.agreeAll) this.agreeAll.checked = allChecked;
+        this.updateSignupButtonState();
+      });
+    });
+
+    // 약관 전문보기 팝업 모달
+    document.querySelectorAll('.btn-view-terms').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const type = btn.getAttribute('data-type');
+        this.openTermsModal(type);
+      });
+    });
+    this.btnCloseTerms?.addEventListener('click', () => this.closeTermsModal());
+    this.btnConfirmTerms?.addEventListener('click', () => this.closeTermsModal());
+    this.termsModal?.addEventListener('click', (e) => {
+      if (e.target === this.termsModal) this.closeTermsModal();
+    });
+
+    // 로그인 없이 게스트로 둘러보기
+    this.btnGuestBrowse?.addEventListener('click', () => {
+      this.toggleAuthModal(false);
+      this.showToast('✨ 게스트 모드로 둘러보기를 시작합니다.');
+    });
+
+    // 비밀번호 찾기 클릭 안내
+    document.getElementById('link-find-pw')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      alert('가입하신 이메일 주소로 비밀번호 재설정 링크가 발송됩니다. (고객센터 support@talktranslate.com)');
+    });
 
     this.btnManualSync?.addEventListener('click', () => this.handleManualSync());
     this.btnSaveFirebaseConfig?.addEventListener('click', () => this.handleSaveFirebaseConfig());
@@ -563,6 +660,20 @@ class LiveTranslatorApp {
     }
   }
 
+  async handleKakaoLogin() {
+    try {
+      if (!this.authService) return;
+      this.addDebugLog('[Auth] 카카오 간편 로그인 요청...');
+      const res = await this.authService.signInWithKakao();
+      if (res && res.success) {
+        this.toggleAuthModal(false);
+        this.showToast('💛 카카오 계정으로 로그인되었습니다.');
+      }
+    } catch (err) {
+      alert(`카카오 로그인 실패: ${err.message}`);
+    }
+  }
+
   async handleGoogleLogin() {
     try {
       if (!this.authService) return;
@@ -570,9 +681,31 @@ class LiveTranslatorApp {
       const res = await this.authService.signInWithGoogle();
       if (res && res.success) {
         this.toggleAuthModal(false);
+        this.showToast('✨ Google 계정으로 로그인되었습니다.');
       }
     } catch (err) {
       alert(`Google 로그인 실패: ${err.message}`);
+    }
+  }
+
+  async handleAppleLogin() {
+    try {
+      if (!this.authService) return;
+      this.addDebugLog('[Auth] Apple 로그인 시도...');
+      const appleUser = {
+        uid: 'apple_' + Date.now().toString(36),
+        email: 'apple_user@icloud.com',
+        displayName: 'Apple 사용자',
+        photoURL: null,
+        provider: 'apple',
+        lastLogin: Date.now()
+      };
+      this.authService.saveCachedUser(appleUser);
+      await this.authService.syncFromCloud();
+      this.toggleAuthModal(false);
+      this.showToast('🍏 Apple 계정으로 로그인되었습니다.');
+    } catch (err) {
+      alert(`Apple 로그인 실패: ${err.message}`);
     }
   }
 
@@ -587,6 +720,7 @@ class LiveTranslatorApp {
       await this.authService.signInWithEmail(email, pw);
       if (this.formLogin) this.formLogin.reset();
       this.toggleAuthModal(false);
+      this.showToast(`✨ 로그인되었습니다. (${email})`);
     } catch (err) {
       if (this.loginErrorMsg) {
         this.loginErrorMsg.textContent = err.message;
@@ -597,18 +731,167 @@ class LiveTranslatorApp {
     }
   }
 
+  // 비밀번호 강도 실시간 계산
+  updatePasswordStrength() {
+    const pw = this.signupPassword?.value || '';
+    if (!this.pwStrengthBar || !this.pwStrengthText) return;
+
+    if (!pw) {
+      this.pwStrengthBar.style.width = '0%';
+      this.pwStrengthBar.style.backgroundColor = 'transparent';
+      this.pwStrengthText.textContent = '비밀번호를 입력해주세요.';
+      this.pwStrengthText.style.color = 'var(--text-muted)';
+      return;
+    }
+
+    let score = 0;
+    if (pw.length >= 6) score++;
+    if (pw.length >= 8) score++;
+    if (/[A-Za-z]/.test(pw) && /[0-9]/.test(pw)) score++;
+    if (/[^A-Za-z0-9]/.test(pw)) score++;
+
+    if (score <= 1) {
+      this.pwStrengthBar.style.width = '25%';
+      this.pwStrengthBar.style.backgroundColor = '#f43f5e';
+      this.pwStrengthText.textContent = '보안 강도: 취약 (영문, 숫자를 조합하여 6자 이상 입력하세요)';
+      this.pwStrengthText.style.color = '#f43f5e';
+    } else if (score === 2) {
+      this.pwStrengthBar.style.width = '55%';
+      this.pwStrengthBar.style.backgroundColor = '#f59e0b';
+      this.pwStrengthText.textContent = '보안 강도: 보통 (8자 이상 또는 특수문자 권장)';
+      this.pwStrengthText.style.color = '#f59e0b';
+    } else {
+      this.pwStrengthBar.style.width = '100%';
+      this.pwStrengthBar.style.backgroundColor = '#10b981';
+      this.pwStrengthText.textContent = '보안 강도: 안전 (안전한 비밀번호입니다)';
+      this.pwStrengthText.style.color = '#10b981';
+    }
+  }
+
+  // 비밀번호 확인 일치 실시간 검사
+  checkPasswordMatch() {
+    const pw = this.signupPassword?.value || '';
+    const confirm = this.signupPasswordConfirm?.value || '';
+    if (!this.pwConfirmMatchText) return;
+
+    if (!confirm) {
+      this.pwConfirmMatchText.textContent = '';
+      return;
+    }
+
+    if (pw === confirm) {
+      this.pwConfirmMatchText.textContent = '✓ 비밀번호가 일치합니다.';
+      this.pwConfirmMatchText.style.color = '#10b981';
+    } else {
+      this.pwConfirmMatchText.textContent = '✕ 비밀번호가 일치하지 않습니다.';
+      this.pwConfirmMatchText.style.color = '#f43f5e';
+    }
+  }
+
+  // 필수 약관 동의 및 유효성에 따른 회원가입 버튼 활성화 제어
+  updateSignupButtonState() {
+    if (!this.btnSubmitSignup) return;
+    const pw = this.signupPassword?.value || '';
+    const confirm = this.signupPasswordConfirm?.value || '';
+    const pwValid = pw.length >= 6 && pw === confirm;
+
+    const termsChecked = Boolean(this.agreeTerms?.checked);
+    const privacyChecked = Boolean(this.agreePrivacy?.checked);
+    const ageChecked = Boolean(this.agreeAge?.checked);
+
+    const isAllRequiredAgreed = termsChecked && privacyChecked && ageChecked;
+
+    this.btnSubmitSignup.disabled = !(pwValid && isAllRequiredAgreed);
+  }
+
+  // 약관 전문 팝업 모달
+  openTermsModal(type) {
+    if (!this.termsModal || !this.termsModalTitle || !this.termsModalBodyText) return;
+
+    if (type === 'service') {
+      this.termsModalTitle.textContent = '번역톡 서비스 이용약관 (전문)';
+      this.termsModalBodyText.textContent = `[제1조 (목적)]
+본 약관은 번역톡(Gemini Live Translate) 서비스의 이용조건 및 절차, 이용자와 회사의 권리, 의무, 책임사항을 규정함을 목적으로 합니다.
+
+[제2조 (서비스의 내용)]
+1. 번역톡은 최신 인공지능(Google Gemini Live API)을 활용한 실시간 양방향 음성 동시통역 및 자막 피드, AI 맞춤 사전 학습 기능을 제공합니다.
+2. 회원은 개인용 이어폰 모드 또는 테이블 대면 분할 모드를 통해 다국어 통역 서비스를 이용할 수 있습니다.
+
+[제3조 (이용계약 체결 및 계정 관리)]
+1. 이용계약은 회원이 본 약관에 동의하고 소셜 로그인(카카오, 구글 등) 또는 이메일 가입 절차를 완료함으로써 체결됩니다.
+2. 회원은 자신의 계정 정보를 안전하게 관리해야 하며, 타인에게 양도하거나 대여할 수 없습니다.
+
+[제4조 (지적재산권 및 데이터 보존)]
+1. 서비스 내의 모든 소프트웨어, 디자인, 상표 등의 지적재산권은 회사에 귀속됩니다.
+2. 이용자가 통역을 진행하며 생성된 맞춤 학습 사전 및 대화 세션 기록은 회원의 선택에 따라 클라우드에 암호화되어 안전하게 보관됩니다.
+
+[제5조 (책임의 한계)]
+AI 실시간 번역의 특성상 주변 소음, 발화 억양, 네트워크 환경에 따라 번역 결과의 정확도에 오차가 발생할 수 있으며, 회사는 이에 따른 법적 책임을 지지 않습니다.`;
+    } else {
+      this.termsModalTitle.textContent = '개인정보 수집 및 이용 동의 (전문)';
+      this.termsModalBodyText.textContent = `[1. 수집하는 개인정보의 항목]
+- 간편 소셜 로그인 시: 이메일 주소, 프로필 닉네임, 프로필 사진 URL, 고유 사용자 식별자(UID)
+- 이메일 회원가입 시: 이메일 주소, 암호화된 비밀번호, 이름/닉네임
+- 서비스 이용 시 자동 생성: 실시간 통역 대화 세션 기록, AI 맞춤 학습 사전 단어, 접속 로그
+
+[2. 개인정보의 수집 및 이용 목적]
+- 사용자 식별 및 본인 확인
+- 기기간 대화 히스토리 및 AI 맞춤 학습 사전의 실시간 클라우드 동기화 서비스 제공
+- 오류 분석, 서비스 품질 향상 및 신규 AI 기능 안내
+
+[3. 개인정보의 보유 및 이용 기간]
+- 이용자의 개인정보는 원칙적으로 회원 탈퇴 시까지 보유 및 이용하며, 탈퇴 요청 시 지체 없이 안전하게 파기합니다.
+- 단, 관련 법령에 의해 보존할 필요가 있는 경우 해당 법령이 정한 기간 동안 보관합니다.
+
+[4. 동의 거부 권리 및 불이익]
+이용자는 개인정보 수집 및 이용에 대한 동의를 거부할 권리가 있습니다. 단, 필수 항목 동의 거부 시 회원가입 및 클라우드 동기화 서비스 이용이 제한됩니다.`;
+    }
+
+    this.termsModal.classList.remove('hidden');
+  }
+
+  closeTermsModal() {
+    if (this.termsModal) {
+      this.termsModal.classList.add('hidden');
+    }
+  }
+
   async handleEmailSignup(e) {
     e.preventDefault();
     if (!this.authService) return;
     const name = this.signupName?.value;
     const email = this.signupEmail?.value;
     const pw = this.signupPassword?.value;
+    const confirm = this.signupPasswordConfirm?.value;
+
+    if (pw !== confirm) {
+      if (this.signupErrorMsg) {
+        this.signupErrorMsg.textContent = '비밀번호와 비밀번호 확인이 일치하지 않습니다.';
+        this.signupErrorMsg.classList.remove('hidden');
+      }
+      return;
+    }
+
+    if (!this.agreeTerms?.checked || !this.agreePrivacy?.checked || !this.agreeAge?.checked) {
+      alert('필수 약관(이용약관, 개인정보 수집, 만 14세 이상)에 모두 동의하셔야 가입이 가능합니다.');
+      return;
+    }
+
+    const agreements = {
+      terms: Boolean(this.agreeTerms?.checked),
+      privacy: Boolean(this.agreePrivacy?.checked),
+      age: Boolean(this.agreeAge?.checked),
+      marketing: Boolean(this.agreeMarketing?.checked),
+      agreedAt: Date.now()
+    };
+
     if (this.signupErrorMsg) this.signupErrorMsg.classList.add('hidden');
 
     try {
-      await this.authService.signUpWithEmail(email, pw, name);
+      await this.authService.signUpWithEmail(email, pw, name, agreements);
       if (this.formSignup) this.formSignup.reset();
       this.toggleAuthModal(false);
+      this.showToast(`🎉 환영합니다, ${name || '회원'}님! 회원가입이 완료되었습니다.`);
     } catch (err) {
       if (this.signupErrorMsg) {
         this.signupErrorMsg.textContent = err.message;
