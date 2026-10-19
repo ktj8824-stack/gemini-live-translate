@@ -65,8 +65,13 @@ class LiveTranslatorApp {
     this.speechMode = localStorage.getItem('gemini_speech_mode') || 'handsfree'; // 'handsfree' | 'ptt'
     
     // [자동 감지 (Handsfree) 전용 설정 및 상태]
-    this.pauseTolerance = parseInt(localStorage.getItem('gemini_pause_tolerance') || '2000', 10);
-    this.smartGuard = localStorage.getItem('gemini_smart_guard') !== 'false';
+    let savedPause = localStorage.getItem('gemini_pause_tolerance');
+    if (!savedPause || savedPause === '2000' || savedPause === '1500' || savedPause === '800') {
+      savedPause = '500';
+      localStorage.setItem('gemini_pause_tolerance', '500');
+    }
+    this.pauseTolerance = parseInt(savedPause, 10);
+    this.smartGuard = localStorage.getItem('gemini_smart_guard') !== 'false'; // 기본 true (문장 끝난 후 깨끗하게 통역 음성 출력)
     this.handsfreeSilenceTimer = null;
     this.isHandsfreeSpeaking = false;
 
@@ -358,6 +363,7 @@ class LiveTranslatorApp {
     this.settingSmartGuard?.addEventListener('change', (e) => {
       this.smartGuard = e.target.checked;
       localStorage.setItem('gemini_smart_guard', String(this.smartGuard));
+      localStorage.setItem('gemini_smart_guard_user_set', 'true');
       this.addDebugLog(`[Settings] 스마트 긴 문장 보호: ${this.smartGuard ? 'ON' : 'OFF'}`);
     });
 
@@ -374,38 +380,83 @@ class LiveTranslatorApp {
     this.dictTargetInput?.addEventListener('keypress', (e) => {
       if (e.key === 'Enter') this.addDictionaryRule();
     });
+
+    // 앱 종료 및 화면 이탈 시 진행 중이던 대화 세션을 히스토리에 통째로 안전 자동 저장
+    window.addEventListener('beforeunload', () => {
+      this.saveCurrentSessionToHistory('app_exit');
+    });
+    window.addEventListener('pagehide', () => {
+      this.saveCurrentSessionToHistory('app_exit');
+    });
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') {
+        this.saveCurrentSessionToHistory('app_background');
+      }
+    });
   }
 
-  clearChatWithHistorySave() {
+  saveCurrentSessionToHistory(reason = 'manual') {
     // 1. 현재 화면이나 버퍼에 아직 처리되지 않은 발화가 있다면 먼저 플러시하여 세션에 포함
     if (this.currentInputText || this.currentOutputText) {
       this.flushCurrentTurnToHistory();
     }
 
-    // 2. 현재 세션에 대화(currentSessionTurns)가 있었다면 히스토리 저장 확인 및 로컬스토리지 갱신
-    const sessionCount = this.currentSessionTurns.length;
-    if (sessionCount > 0) {
-      this.currentSessionTurns.forEach((turn) => {
-        if (!this.history.some((h) => h.id === turn.id)) {
-          this.history.push(turn);
-        }
-      });
-      localStorage.setItem('gemini_chat_history', JSON.stringify(this.history));
-      this.renderHistory();
-      this.showToast(`💾 대화 ${sessionCount}건이 대화 기록에 안전하게 저장되었습니다.`);
-      this.setStatusPill('✨ 대화 저장 완료 및 새 대화 시작', '#10b981');
-      this.addDebugLog(`[대화 저장] ${sessionCount}건의 대화가 히스토리에 보관되었습니다.`);
+    if (!this.currentSessionTurns || this.currentSessionTurns.length === 0) {
+      return false;
+    }
+
+    const turnsCount = this.currentSessionTurns.length;
+    const now = new Date();
+    const dateStr = now.toLocaleDateString([], { year: 'numeric', month: '2-digit', day: '2-digit' });
+    const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    const srcLangObj = SUPPORTED_LANGUAGES.find((l) => l.code === this.userLang);
+    const tgtLangObj = SUPPORTED_LANGUAGES.find((l) => l.code === this.partnerLang);
+
+    const sessionItem = {
+      id: Date.now(),
+      timestamp: Date.now(),
+      dateStr,
+      timeStr,
+      title: `${dateStr} ${timeStr} 대화 세션`,
+      mode: this.speechMode,
+      modeLabel: this.speechMode === 'ptt' ? '누르고 말하기 (PTT)' : '자동 감지 (핸즈프리)',
+      userLang: this.userLang,
+      partnerLang: this.partnerLang,
+      langPair: `${srcLangObj ? srcLangObj.name : this.userLang} ➔ ${tgtLangObj ? tgtLangObj.name : this.partnerLang}`,
+      turnsCount,
+      turns: [...this.currentSessionTurns],
+      reason
+    };
+
+    // 최신 대화 세션이 히스토리 상단에 오도록 추가
+    this.history.unshift(sessionItem);
+    localStorage.setItem('gemini_chat_history', JSON.stringify(this.history));
+    this.renderHistory();
+
+    this.currentSessionTurns = [];
+    this.addDebugLog(`[히스토리 보관] 대화 ${turnsCount}건이 단 1개의 완성된 세션 카드로 히스토리에 저장되었습니다. (사유: ${reason})`);
+    return true;
+  }
+
+  clearChatWithHistorySave() {
+    // 1. 현재 대화 세션을 단 1개의 완성된 세션 카드로 히스토리에 통째로 저장
+    const saved = this.saveCurrentSessionToHistory('reset');
+
+    if (saved) {
+      this.showToast('💾 이전 대화가 대화 기록에 세션으로 안전하게 저장되었습니다.');
+      this.setStatusPill('✨ 새 대화창 준비 완료', '#10b981');
     } else {
       this.showToast('새 대화창이 준비되었습니다.');
       this.setStatusPill('대기 중 (새 대화)', '#94a3b8');
     }
 
-    // 3. 화면 대화창(로그 카드) 깨끗하게 초기화
+    // 2. 화면 대화창(로그 카드) 깨끗하게 초기화
     if (this.userChatLog) this.userChatLog.innerHTML = '';
     if (this.partnerChatLog) this.partnerChatLog.innerHTML = '';
     this.currentSessionTurns = [];
 
-    // 4. 솔로 피드 모드 초기화
+    // 3. 솔로 피드 모드 초기화
     if (this.conversationFeed) {
       this.conversationFeed.innerHTML = `
         <div class="feed-placeholder">
@@ -416,13 +467,15 @@ class LiveTranslatorApp {
       `;
     }
 
-    // 5. 실시간 자막 초기 힌트 텍스트 복원
-    if (this.userPrimaryText) this.userPrimaryText.textContent = '말씀을 시작하세요...';
-    if (this.userSecondaryText) this.userSecondaryText.textContent = '번역 결과가 여기에 함께 표시됩니다.';
-    if (this.partnerPrimaryText) this.partnerPrimaryText.textContent = 'Real-time translation will appear here.';
-    if (this.partnerSecondaryText) this.partnerSecondaryText.textContent = '말씀하시면 실시간으로 통역됩니다.';
+    // 4. 실시간 자막 초기 힌트 텍스트 복원
+    if (this.userPrimaryText) this.userPrimaryText.textContent = '';
+    if (this.userSecondaryText) this.userSecondaryText.textContent = '';
+    if (this.partnerPrimaryText) this.partnerPrimaryText.textContent = '';
+    if (this.partnerSecondaryText) this.partnerSecondaryText.textContent = '';
+    if (this.userLiveWrap) this.userLiveWrap.style.display = 'none';
+    if (this.partnerLiveWrap) this.partnerLiveWrap.style.display = 'none';
 
-    // 6. 내부 버퍼 초기화
+    // 5. 내부 버퍼 초기화
     this.currentInputText = '';
     this.currentOutputText = '';
 
@@ -436,10 +489,59 @@ class LiveTranslatorApp {
   }
 
   setSpeechMode(mode) {
+    if (this.speechMode === mode) return;
+
+    // 1. 모드 전환 시 이전 모드에서 나눈 대화 세션을 히스토리에 단 1개의 완성된 세션 카드로 안전 보관!
+    this.saveCurrentSessionToHistory('mode_switch');
+
+    // 2. 기존에 마이크가 켜져 있었다면 즉시 완전 종료 (모드 간 마이크 인계 차단)
+    if (this.isStreaming) {
+      this.stopStreaming();
+    }
+
+    // 2. 모드별 진행 중이던 타이머 및 발화 상태 완전 초기화
+    if (this.pttTurnFallbackTimer) {
+      clearTimeout(this.pttTurnFallbackTimer);
+      this.pttTurnFallbackTimer = null;
+    }
+    if (this.handsfreeSilenceTimer) {
+      clearTimeout(this.handsfreeSilenceTimer);
+      this.handsfreeSilenceTimer = null;
+    }
+
+    this.isPttHolding = false;
+    this.isPttWaitingCompletion = false;
+    this.isHandsfreeSpeaking = false;
+    this.turnCompleteReceivedDuringTail = false;
+    this.pendingAudioQueue = [];
+
+    // 3. 버튼 active 시각 효과 및 라벨 복원
+    this.btnPttPartner?.classList.remove('ptt-active');
+    this.btnPttUser?.classList.remove('ptt-active');
+    if (this.partnerPttBtnText) this.partnerPttBtnText.textContent = '누르고 말하기 (Guest)';
+    if (this.userPttBtnText) this.userPttBtnText.textContent = '누르고 말하기 (나)';
+    this.btnToggleStream?.classList.remove('ptt-active');
+    this.btnSoloMic?.classList.remove('ptt-active');
+
+    // 4. 모드 변경 저장 및 UI 전환
     this.speechMode = mode;
     localStorage.setItem('gemini_speech_mode', mode);
     this.updateSpeechModeUI();
-    this.addDebugLog(`[Mode] 발화 방식 변경: ${mode === 'ptt' ? '누르고 말하기 (PTT)' : '자동 감지 (핸즈프리)'}`);
+
+    // 5. 각 모드의 독립적인 순수 대기 상태 UI 설정
+    if (mode === 'ptt') {
+      this.updatePttIdleUI();
+    } else {
+      this.setStatusPill('준비 완료 (마이크 터치)', '#10b981');
+      if (this.streamStatusLabel) {
+        this.streamStatusLabel.textContent = '터치하여 실시간 동시통역 시작 (중간 호흡 대기)';
+      }
+      if (this.soloMicText) {
+        this.soloMicText.textContent = '통역 시작';
+      }
+    }
+
+    this.addDebugLog(`[Mode] 발화 방식 변경: ${mode === 'ptt' ? '누르고 말하기 (PTT)' : '자동 감지 (핸즈프리)'} (마이크 완전 초기화)`);
   }
 
   updateSpeechModeUI() {
@@ -480,7 +582,7 @@ class LiveTranslatorApp {
     }
   }
 
-  sendSilenceBurst(count = 5) {
+  sendSilenceBurst(count = 4) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     // 16000Hz 16-bit Mono PCM 60ms = 960 samples = 1920 zero bytes = 2560 'A's in base64
     const silenceBase64 = 'A'.repeat(2560);
@@ -498,9 +600,9 @@ class LiveTranslatorApp {
             }
           };
           this.ws.send(JSON.stringify(payload));
-          this.addDebugLog(`[PTT VAD] 무음 종결 신호 전송 (${i + 1}/${count})`);
+          this.addDebugLog(`[VAD] 무음 종결 신호 전송 (${i + 1}/${count})`);
         }
-      }, i * 60);
+      }, i * 35);
     }
   }
 
@@ -526,6 +628,7 @@ class LiveTranslatorApp {
     this.turnCompleteReceivedDuringTail = false;
     this.lastSpeechTime = Date.now();
     this.isUserSpeaking = true;
+    this.renderLiveTranscript();
 
     // Visual active states for respective button
     if (speaker === 'partner') {
@@ -669,22 +772,22 @@ class LiveTranslatorApp {
   onHandsfreeSpeechEnded() {
     this.isHandsfreeSpeaking = false;
     this.handsfreeSilenceTimer = null;
-    this.addDebugLog(`[자동감지] 발화 멈춤 감지 (${this.pauseTolerance}ms 경과) -> 턴 정리`);
+    this.addDebugLog(`[자동감지] 발화 멈춤 감지 (${this.pauseTolerance}ms 경과) -> 통역 음성 재생`);
 
     // 스마트 긴 문장 보호로 보류되었던 번역 음성 일괄 재생
     this.playPendingAudioQueue();
 
-    // 만약 이미 서버에서 turnComplete가 도착해 있었다면 마감 진행
-    if (this.turnCompleteReceivedDuringTail) {
-      this.turnCompleteReceivedDuringTail = false;
-      const remainingSec = this.audioStreamer ? this.audioStreamer.getRemainingPlaybackTime() : 0;
-      const waitMs = Math.max(100, Math.round(remainingSec * 1000) + 150);
-      setTimeout(() => {
-        if (this.speechMode === 'handsfree') {
+    // 말이 멈추고 음성 재생이 끝나는 시점에 즉시 현재 턴을 카드로 마감하여 다음 대화와 분리
+    this.turnCompleteReceivedDuringTail = false;
+    const remainingSec = this.audioStreamer ? this.audioStreamer.getRemainingPlaybackTime() : 0;
+    const waitMs = Math.max(120, Math.round(remainingSec * 1000) + 120);
+    setTimeout(() => {
+      if (this.speechMode === 'handsfree' && !this.isHandsfreeSpeaking) {
+        if (this.currentInputText || this.currentOutputText) {
           this.flushCurrentTurnToHistory();
         }
-      }, waitMs);
-    }
+      }
+    }, waitMs);
   }
 
   shouldHoldAudioPlayback() {
@@ -1135,6 +1238,10 @@ Do not include markdown code block quotes. Output pure JSON only.`;
     const serverContent = data.serverContent || data.server_content || data.payload?.serverContent;
     if (!serverContent) return;
 
+    if (serverContent.interrupted) {
+      this.addDebugLog('[Gemini] 사용자 발화 감지로 AI 음성 출력이 중단됨(interrupted)');
+    }
+
     const refreshPttFallback = () => {
       if (this.speechMode === 'ptt' && !this.isPttHolding && this.isPttWaitingCompletion && this.pttTurnFallbackTimer) {
         clearTimeout(this.pttTurnFallbackTimer);
@@ -1235,7 +1342,7 @@ Do not include markdown code block quotes. Output pure JSON only.`;
           this.turnCompleteReceivedDuringTail = true;
         } else {
           const remainingSec = this.audioStreamer ? this.audioStreamer.getRemainingPlaybackTime() : 0;
-          const waitMs = Math.max(100, Math.round(remainingSec * 1000) + 150);
+          const waitMs = Math.max(60, Math.round(remainingSec * 1000) + 80);
           setTimeout(() => {
             if (this.speechMode === 'handsfree') {
               this.flushCurrentTurnToHistory();
@@ -1353,12 +1460,29 @@ Do not include markdown code block quotes. Output pure JSON only.`;
     const { userText, partnerText } = this.splitLanguages(this.currentInputText, this.currentOutputText);
 
     // 1. User View (하단: 나) -> 언제나 내 언어(userText)가 크고, 상대방 언어(partnerText)가 작게
-    if (this.userPrimaryText) this.userPrimaryText.textContent = userText;
-    if (this.userSecondaryText) this.userSecondaryText.textContent = partnerText;
+    if (this.userPrimaryText) {
+      this.userPrimaryText.textContent = userText || (this.isPttHolding && this.currentPttSpeaker === 'user' ? '말씀하시는 내용을 기록하고 있습니다...' : '');
+    }
+    if (this.userSecondaryText) {
+      this.userSecondaryText.textContent = partnerText || '';
+    }
 
     // 2. Partner View (상단: 상대방) -> 언제나 상대방 언어(partnerText)가 크고, 내 언어(userText)가 작게
-    if (this.partnerPrimaryText) this.partnerPrimaryText.textContent = partnerText;
-    if (this.partnerSecondaryText) this.partnerSecondaryText.textContent = userText;
+    if (this.partnerPrimaryText) {
+      this.partnerPrimaryText.textContent = partnerText || (this.isPttHolding && this.currentPttSpeaker === 'partner' ? 'Listening and recording...' : '');
+    }
+    if (this.partnerSecondaryText) {
+      this.partnerSecondaryText.textContent = userText || '';
+    }
+
+    // 라이브 버블 표시 여부: 누르고 있는 동안 또는 실시간 텍스트가 있을 때만 활성화
+    const hasLiveContent = Boolean(this.currentInputText || this.currentOutputText || this.isPttHolding);
+    if (this.userLiveWrap) {
+      this.userLiveWrap.style.display = hasLiveContent ? 'block' : 'none';
+    }
+    if (this.partnerLiveWrap) {
+      this.partnerLiveWrap.style.display = hasLiveContent ? 'block' : 'none';
+    }
 
     if (this.userChatLog) {
       const p = this.userChatLog.closest('.transcript-display');
@@ -1370,13 +1494,79 @@ Do not include markdown code block quotes. Output pure JSON only.`;
     }
   }
 
-  flushCurrentTurnToHistory() {
-    if (!this.currentInputText && !this.currentOutputText) return;
+  // 문장 종결 부호(. ? ! 。 ？ ！ \n) 기준으로 텍스트를 문장 단위로 분할
+  splitSentences(text) {
+    if (!text || typeof text !== 'string') return [];
+    const parts = [];
+    let current = '';
+    const endPuncts = new Set(['.', '?', '!', '。', '？', '！', '\n']);
 
-    const { userText, partnerText, speaker } = this.splitLanguages(
-      this.currentInputText.trim(),
-      this.currentOutputText.trim()
-    );
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      current += ch;
+
+      if (endPuncts.has(ch)) {
+        // 숫자 소수점 예외 방지 (예: 3.5, 10.2)
+        if (ch === '.' && i > 0 && i < text.length - 1 && /\d/.test(text[i - 1]) && /\d/.test(text[i + 1])) {
+          continue;
+        }
+        const nextChar = text[i + 1];
+        if (!nextChar || /\s/.test(nextChar) || nextChar === '\n' || endPuncts.has(nextChar)) {
+          while (i + 1 < text.length && endPuncts.has(text[i + 1])) {
+            i++;
+            current += text[i];
+          }
+          parts.push(current.trim());
+          current = '';
+          while (i + 1 < text.length && (text[i + 1] === ' ' || text[i + 1] === '\t')) {
+            i++;
+          }
+        }
+      }
+    }
+    if (current.trim()) {
+      parts.push(current.trim());
+    }
+    return parts.filter(Boolean);
+  }
+
+  isSentenceClosed(str) {
+    if (!str) return false;
+    return /[.?!。？！\n]$/.test(str.trim());
+  }
+
+  // 실시간 스트리밍 중 이미 완결된 앞선 문장을 먼저 카드로 독립 마감 (자동 감지 모드 전용)
+  checkAndFlushRealtimeSentences() {
+    // [CRITICAL] PTT 모드에서는 버튼을 누르고 있는 동안 문장을 절대 임의로 쪼개지 않음!
+    // 한 번 누르고 말한 모든 내용이 하나의 대화창에 온전히 유지되어야 함.
+    if (this.speechMode === 'ptt') return;
+
+    if (!this.currentInputText || !this.currentOutputText) return;
+
+    const inSentences = this.splitSentences(this.currentInputText);
+    const outSentences = this.splitSentences(this.currentOutputText);
+
+    // 원문과 번역문 모두 2문장 이상이고, 첫 문장이 종결 부호로 닫혀 있을 때
+    if (inSentences.length >= 2 && outSentences.length >= 2) {
+      if (this.isSentenceClosed(inSentences[0]) && this.isSentenceClosed(outSentences[0])) {
+        const completedIn = inSentences.shift();
+        const completedOut = outSentences.shift();
+
+        this.createAndAppendTurnCard(completedIn, completedOut);
+
+        this.currentInputText = inSentences.join(' ');
+        this.currentOutputText = outSentences.join(' ');
+        this.renderLiveTranscript();
+      }
+    }
+  }
+
+  createAndAppendTurnCard(inputStr, outputStr) {
+    const rawInput = (inputStr || '').trim();
+    const rawOutput = (outputStr || '').trim();
+    if (!rawInput && !rawOutput) return;
+
+    const { userText, partnerText, speaker } = this.splitLanguages(rawInput, rawOutput);
 
     const srcCode = speaker === 'partner' ? this.partnerLang : this.userLang;
     const tgtCode = speaker === 'partner' ? this.userLang : this.partnerLang;
@@ -1384,10 +1574,10 @@ Do not include markdown code block quotes. Output pure JSON only.`;
     const tgtLangObj = SUPPORTED_LANGUAGES.find(l => l.code === tgtCode);
 
     const item = {
-      id: Date.now(),
+      id: Date.now() + Math.floor(Math.random() * 1000),
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-      original: this.currentInputText.trim(),
-      translated: this.currentOutputText.trim(),
+      original: rawInput,
+      translated: rawOutput,
       userText,
       partnerText,
       speaker, // 'user' | 'partner'
@@ -1396,25 +1586,34 @@ Do not include markdown code block quotes. Output pure JSON only.`;
     };
 
     if (item.original || item.translated) {
-      // 1. 화면에 대화 카드 추가
       this.currentSessionTurns.push(item);
       this.appendTurnToChatLog(item);
       this.appendFeedBubble(item);
-
-      // 2. 대화 기록 저장소에도 자동 보관
-      this.history.push(item);
-      localStorage.setItem('gemini_chat_history', JSON.stringify(this.history));
-      this.renderHistory();
     }
+  }
+
+  flushCurrentTurnToHistory() {
+    if (!this.currentInputText && !this.currentOutputText) return;
+
+    const rawIn = this.currentInputText.trim();
+    const rawOut = this.currentOutputText.trim();
+    if (!rawIn && !rawOut) return;
+
+    // 길게 이야기한 대화 전체를 분할하지 않고 1개의 완성된 대화 카드로 묶어서 채팅창에 등록!
+    // 이전 대화 카드들은 화면에 그대로 보존되며, 그 밑에 새 카드로 차곡차곡 쌓임
+    this.createAndAppendTurnCard(rawIn, rawOut);
 
     this.currentInputText = '';
     this.currentOutputText = '';
 
-    // 실시간 자막 비우기
+    // 실시간 라이브 자막창 초기화 (다음 대화가 깨끗한 새 창에 입력되도록 준비)
     if (this.userPrimaryText) this.userPrimaryText.textContent = '';
     if (this.userSecondaryText) this.userSecondaryText.textContent = '';
     if (this.partnerPrimaryText) this.partnerPrimaryText.textContent = '';
     if (this.partnerSecondaryText) this.partnerSecondaryText.textContent = '';
+
+    if (this.userLiveWrap) this.userLiveWrap.style.display = 'none';
+    if (this.partnerLiveWrap) this.partnerLiveWrap.style.display = 'none';
   }
 
   appendTurnToChatLog(item) {
@@ -1501,51 +1700,141 @@ Do not include markdown code block quotes. Output pure JSON only.`;
   }
 
   renderHistory() {
+    if (!this.historyList) return;
     if (this.history.length === 0) {
-      this.historyList.innerHTML = '<p class="empty-history">아직 기록된 대화가 없습니다.</p>';
+      this.historyList.innerHTML = '<p class="empty-history">아직 기록된 대화 세션이 없습니다.</p>';
       return;
     }
 
     this.historyList.innerHTML = '';
-    this.history.forEach((h) => {
-      const el = document.createElement('div');
-      el.className = 'history-item';
-      el.innerHTML = `
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-          <div class="speaker">${h.time} [${h.fromLang} ➔ ${h.toLang}]</div>
-          <button class="learn-btn" style="background:rgba(0,229,255,0.15); border:1px solid #00e5ff; color:#00e5ff; padding:2px 8px; border-radius:4px; font-size:0.75rem; cursor:pointer;" title="이 대화를 맞춤 번역 규칙으로 AI에 학습">🧠 AI 학습</button>
-        </div>
-        <div class="text-main">${h.translated || '...'}</div>
-        <div class="text-sub">원문: ${h.original || '...'}</div>
-      `;
+    this.history.forEach((session, sessionIdx) => {
+      // 1. 최신 세션 기반 데이터인 경우 (세션 단위 묶음 카드)
+      if (session.turns && Array.isArray(session.turns)) {
+        const turns = session.turns;
+        const sessionCard = document.createElement('div');
+        sessionCard.className = 'history-session-card';
 
-      el.querySelector('.learn-btn').addEventListener('click', () => {
-        const correctTarget = prompt(`"${h.original}"에 대해 AI가 기억해야 할 올바른 번역을 입력해주세요:`, h.translated);
-        if (correctTarget && correctTarget.trim()) {
-          this.addDictionaryRule(h.original, correctTarget.trim());
-          alert(`✅ AI 학습 완료!\n"${h.original}" ➔ "${correctTarget.trim()}" 규칙이 저장되었습니다. 다음 통역부터 즉시 적용됩니다.`);
-        }
-      });
+        const turnsRowsHtml = turns.map((t) => {
+          const isPartner = t.speaker === 'partner';
+          const speakerBadge = isPartner ? '👤 상대방' : '🗣️ 나';
+          const transText = isPartner ? (t.userText || t.translated) : (t.partnerText || t.translated);
+          const origText = isPartner ? (t.partnerText || t.original) : (t.userText || t.original);
 
-      this.historyList.appendChild(el);
+          return `
+            <div class="history-turn-row ${isPartner ? 'partner' : ''}">
+              <div class="history-turn-speaker">${t.time} &middot; ${speakerBadge}</div>
+              <div class="history-turn-trans">${this.escapeHtml(transText)}</div>
+              ${origText && origText !== transText ? `<div class="history-turn-orig">원문: ${this.escapeHtml(origText)}</div>` : ''}
+            </div>
+          `;
+        }).join('');
+
+        sessionCard.innerHTML = `
+          <div class="history-session-header">
+            <div class="history-session-meta">
+              <div class="history-session-title">
+                <span>📅 ${session.dateStr || ''} ${session.timeStr || ''}</span>
+                <span class="history-session-badge">${session.modeLabel || '대화 세션'}</span>
+              </div>
+              <div class="history-session-sub">${session.langPair || ''} &middot; 대화 ${turns.length}건</div>
+            </div>
+            <div class="history-session-actions">
+              <button class="history-session-btn btn-copy-session" title="이 대화 세션 전체 복사">📋 복사</button>
+              <button class="history-session-btn btn-learn-session" style="color:#00e5ff;" title="이 세션의 대화들을 AI 학습에 반영">🧠 학습</button>
+            </div>
+          </div>
+          <div class="history-session-turns-list">
+            ${turnsRowsHtml}
+          </div>
+        `;
+
+        // 세션 전체 복사 버튼
+        sessionCard.querySelector('.btn-copy-session')?.addEventListener('click', () => {
+          const text = turns.map((t) => {
+            const spk = t.speaker === 'partner' ? '상대방' : '나';
+            return `[${t.time}] (${spk}) 원문: ${t.original}\n번역: ${t.translated}`;
+          }).join('\n\n');
+          const header = `=== ${session.title || '대화 세션'} (${session.modeLabel || ''}) ===\n\n`;
+          navigator.clipboard.writeText(header + text).then(() => {
+            alert('이 대화 세션 전체가 클립보드에 복사되었습니다.');
+          });
+        });
+
+        // 세션 AI 맞춤 학습 버튼
+        sessionCard.querySelector('.btn-learn-session')?.addEventListener('click', () => {
+          if (turns.length === 0) return;
+          const firstTurn = turns[0];
+          const correctTarget = prompt(`AI가 기억해야 할 올바른 맞춤 번역 단어나 표현을 입력해주세요:\n(예: ${firstTurn.original} ➔ ...)`);
+          if (correctTarget && correctTarget.trim()) {
+            this.addDictionaryRule(firstTurn.original, correctTarget.trim());
+            alert(`✅ AI 학습 완료! 다음 통역부터 즉시 맞춤 적용됩니다.`);
+          }
+        });
+
+        this.historyList.appendChild(sessionCard);
+      } else {
+        // 2. 구버전 낱개 단일 턴 데이터 하위 호환
+        const el = document.createElement('div');
+        el.className = 'history-item';
+        el.innerHTML = `
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div class="speaker">${session.time || ''} [${session.fromLang || ''} ➔ ${session.toLang || ''}]</div>
+            <button class="learn-btn" style="background:rgba(0,229,255,0.15); border:1px solid #00e5ff; color:#00e5ff; padding:2px 8px; border-radius:4px; font-size:0.75rem; cursor:pointer;" title="이 대화를 맞춤 번역 규칙으로 AI에 학습">🧠 AI 학습</button>
+          </div>
+          <div class="text-main">${this.escapeHtml(session.translated || session.original || '')}</div>
+          <div class="text-sub">원문: ${this.escapeHtml(session.original || '')}</div>
+        `;
+
+        el.querySelector('.learn-btn')?.addEventListener('click', () => {
+          const correctTarget = prompt(`"${session.original}"에 대해 AI가 기억해야 할 올바른 번역을 입력해주세요:`, session.translated);
+          if (correctTarget && correctTarget.trim()) {
+            this.addDictionaryRule(session.original, correctTarget.trim());
+            alert(`✅ AI 학습 완료!`);
+          }
+        });
+
+        this.historyList.appendChild(el);
+      }
     });
-    this.historyList.scrollTop = this.historyList.scrollHeight;
+    this.historyList.scrollTop = 0;
   }
 
   copyHistory() {
     if (this.history.length === 0) return alert('복사할 대화 기록이 없습니다.');
-    const text = this.history.map(h => `[${h.time}] 원문: ${h.original}\n번역: ${h.translated}\n`).join('\n');
-    navigator.clipboard.writeText(text).then(() => alert('대화 기록이 클립보드에 복사되었습니다.'));
+    const fullText = this.history.map((s, idx) => {
+      if (s.turns && Array.isArray(s.turns)) {
+        const turnsText = s.turns.map(t => {
+          const spk = t.speaker === 'partner' ? '상대방' : '나';
+          return `  [${t.time}] (${spk}) ${t.original} ➔ ${t.translated}`;
+        }).join('\n');
+        return `========================================\n[세션 ${idx + 1}] ${s.dateStr || ''} ${s.timeStr || ''} (${s.modeLabel || ''})\n언어: ${s.langPair || ''} (총 ${s.turns.length}건)\n========================================\n${turnsText}`;
+      } else {
+        return `[${s.time || ''}] 원문: ${s.original}\n번역: ${s.translated}`;
+      }
+    }).join('\n\n');
+
+    navigator.clipboard.writeText(fullText).then(() => alert('전체 대화 세션 기록이 클립보드에 복사되었습니다.'));
   }
 
   downloadHistory() {
     if (this.history.length === 0) return alert('저장할 대화 기록이 없습니다.');
-    const text = this.history.map(h => `[${h.time}] [${h.fromLang}->${h.toLang}]\n원문: ${h.original}\n번역: ${h.translated}\n`).join('\n---\n');
-    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const fullText = this.history.map((s, idx) => {
+      if (s.turns && Array.isArray(s.turns)) {
+        const turnsText = s.turns.map(t => {
+          const spk = t.speaker === 'partner' ? '상대방' : '나';
+          return `  [${t.time}] (${spk})\n  원문: ${t.original}\n  번역: ${t.translated}\n`;
+        }).join('\n');
+        return `========================================\n세션 #${idx + 1} | ${s.dateStr || ''} ${s.timeStr || ''} | ${s.modeLabel || ''}\n언어: ${s.langPair || ''}\n========================================\n\n${turnsText}`;
+      } else {
+        return `[${s.time || ''}] [${s.fromLang}->${s.toLang}]\n원문: ${s.original}\n번역: ${s.translated}\n`;
+      }
+    }).join('\n----------------------------------------\n\n');
+
+    const blob = new Blob([fullText], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `gemini-translation-${new Date().toISOString().slice(0,10)}.txt`;
+    a.download = `gemini-sessions-${new Date().toISOString().slice(0, 10)}.txt`;
     a.click();
     URL.revokeObjectURL(url);
   }

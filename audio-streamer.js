@@ -1,7 +1,8 @@
 /**
  * iOS Safari & Android Chrome Production-Grade Audio Streamer
- * - Fixes iOS Safari 0% silent microphone capture bug (GainNode 0 mute loop)
- * - 16kHz resampling with 100ms precise PCM buffering
+ * - Unified Single AudioContext architecture (Fixes iOS dual AudioContext freeze bug)
+ * - Keeps AudioContext active during mic stop so translated audio can play uninterrupted
+ * - 16kHz resampling with 60ms ultra-low latency PCM buffering
  * - 24kHz smooth queue playback
  */
 class AudioStreamer {
@@ -11,39 +12,44 @@ class AudioStreamer {
     this.onOutputVolume = onOutputVolume;
     this.onDebugLog = onDebugLog || console.log;
 
-    this.inputAudioContext = null;
-    this.outputAudioContext = null;
+    // Single unified AudioContext for BOTH input and output to prevent iOS hardware conflict
+    this.audioContext = null;
     this.mediaStream = null;
     this.scriptProcessor = null;
     this.muteGain = null;
     this.isRecording = false;
 
-    this.chunkSampleSize = 960; // 60ms ultra-low latency chunk (16kHz)
+    this.chunkSampleSize = 960; // 60ms chunk (16kHz)
     this.sampleAccumulator = [];
 
     this.nextPlayTime = 0;
     this.outputSampleRate = 24000;
   }
 
+  getAudioContext() {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!this.audioContext || this.audioContext.state === 'closed') {
+      this.audioContext = new AudioCtx();
+    }
+    return this.audioContext;
+  }
+
   async unlockAudio() {
     try {
-      const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      if (!this.outputAudioContext || this.outputAudioContext.state === 'closed') {
-        this.outputAudioContext = new AudioCtx();
-      }
-      if (this.outputAudioContext.state === 'suspended') {
-        await this.outputAudioContext.resume();
+      const ctx = this.getAudioContext();
+      if (ctx.state === 'suspended') {
+        await ctx.resume();
       }
 
       // Unlock iOS Safari hardware playback via dummy silent buffer
-      const silence = this.outputAudioContext.createBuffer(1, 1, 22050);
-      const src = this.outputAudioContext.createBufferSource();
+      const silence = ctx.createBuffer(1, 1, 22050);
+      const src = ctx.createBufferSource();
       src.buffer = silence;
-      src.connect(this.outputAudioContext.destination);
+      src.connect(ctx.destination);
       src.start(0);
 
-      this.nextPlayTime = this.outputAudioContext.currentTime;
-      this.onDebugLog('[Audio] Output Engine Ready: ' + this.outputAudioContext.state);
+      this.nextPlayTime = ctx.currentTime;
+      this.onDebugLog('[Audio] Unified AudioContext Ready: ' + ctx.state + ' (' + ctx.sampleRate + 'Hz)');
     } catch (e) {
       console.warn('[Audio] Unlock error:', e);
     }
@@ -62,6 +68,7 @@ class AudioStreamer {
       throw new Error(errorMsg);
     }
 
+    // Immediately unlock unified audio engine
     await this.unlockAudio();
     this.sampleAccumulator = [];
 
@@ -83,35 +90,32 @@ class AudioStreamer {
       }
       this.mediaStream = stream;
 
-      const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      if (!this.inputAudioContext || this.inputAudioContext.state === 'closed') {
-        this.inputAudioContext = new AudioCtx();
-      }
+      const ctx = this.getAudioContext();
 
-      this.inputAudioContext.onstatechange = () => {
-        if (this.isRecording && this.inputAudioContext && this.inputAudioContext.state === 'suspended') {
-          this.inputAudioContext.resume().catch(() => {});
+      ctx.onstatechange = () => {
+        if (this.audioContext && this.audioContext.state === 'suspended') {
+          this.audioContext.resume().catch(() => {});
         }
       };
 
-      if (this.inputAudioContext.state === 'suspended') {
-        await this.inputAudioContext.resume();
+      if (ctx.state === 'suspended') {
+        await ctx.resume();
       }
 
-      const inputRate = this.inputAudioContext.sampleRate;
+      const inputRate = ctx.sampleRate;
       this.onDebugLog(`[Mic] Hardware SampleRate: ${inputRate}Hz | Tracks: ${stream.getAudioTracks().length}`);
 
-      const source = this.inputAudioContext.createMediaStreamSource(this.mediaStream);
+      const source = ctx.createMediaStreamSource(this.mediaStream);
 
       // ScriptProcessor (2048 samples = ~42ms at 48kHz, ~128ms at 16kHz)
       const bufferSize = 2048;
-      this.scriptProcessor = this.inputAudioContext.createScriptProcessor(bufferSize, 1, 1);
+      this.scriptProcessor = ctx.createScriptProcessor(bufferSize, 1, 1);
       // Prevent GC from collecting the scriptProcessor
       window._activeScriptProcessor = this.scriptProcessor;
 
       // Keep pipeline alive without audible echo (0.00001 prevents WebKit audio graph sleeping)
-      this.muteGain = this.inputAudioContext.createGain();
-      this.muteGain.gain.setValueAtTime(0.00001, this.inputAudioContext.currentTime);
+      this.muteGain = ctx.createGain();
+      this.muteGain.gain.setValueAtTime(0.00001, ctx.currentTime);
 
       this.scriptProcessor.onaudioprocess = (event) => {
         if (!this.isRecording) return;
@@ -153,7 +157,7 @@ class AudioStreamer {
 
       source.connect(this.scriptProcessor);
       this.scriptProcessor.connect(this.muteGain);
-      this.muteGain.connect(this.inputAudioContext.destination);
+      this.muteGain.connect(ctx.destination);
 
       this.isRecording = true;
       this.onDebugLog('[Mic] Active & Streaming');
@@ -196,14 +200,10 @@ class AudioStreamer {
       this.mediaStream = null;
     }
 
-    if (this.inputAudioContext && this.inputAudioContext.state !== 'closed') {
-      try {
-        this.inputAudioContext.suspend();
-      } catch (e) {}
-    }
-
+    // [CRITICAL FOR iOS] Do NOT suspend the AudioContext!
+    // The AudioContext must remain in 'running' state so that incoming translation audio plays cleanly.
     this.sampleAccumulator = [];
-    this.onDebugLog('[Audio] Mic stopped');
+    this.onDebugLog('[Audio] Mic stopped (AudioContext kept running for playback)');
   }
 
   resampleTo16k(inputBuffer, inputSampleRate) {
@@ -260,13 +260,10 @@ class AudioStreamer {
 
   playChunk(base64Data) {
     try {
-      const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      if (!this.outputAudioContext || this.outputAudioContext.state === 'closed') {
-        this.outputAudioContext = new AudioCtx();
-      }
+      const ctx = this.getAudioContext();
 
-      if (this.outputAudioContext.state === 'suspended') {
-        this.outputAudioContext.resume();
+      if (ctx.state === 'suspended') {
+        ctx.resume().catch(() => {});
       }
 
       const binary = atob(base64Data);
@@ -286,20 +283,20 @@ class AudioStreamer {
       }
 
       // Gemini Live outputs 24000Hz PCM
-      const audioBuffer = this.outputAudioContext.createBuffer(1, sampleCount, 24000);
+      const audioBuffer = ctx.createBuffer(1, sampleCount, 24000);
       audioBuffer.getChannelData(0).set(float32Array);
 
-      const source = this.outputAudioContext.createBufferSource();
+      const source = ctx.createBufferSource();
       source.buffer = audioBuffer;
 
       // Master Gain Node at 100% volume
-      const masterGain = this.outputAudioContext.createGain();
-      masterGain.gain.setValueAtTime(1.0, this.outputAudioContext.currentTime);
+      const masterGain = ctx.createGain();
+      masterGain.gain.setValueAtTime(1.0, ctx.currentTime);
 
       source.connect(masterGain);
-      masterGain.connect(this.outputAudioContext.destination);
+      masterGain.connect(ctx.destination);
 
-      const currentTime = this.outputAudioContext.currentTime;
+      const currentTime = ctx.currentTime;
       if (this.nextPlayTime < currentTime) {
         this.nextPlayTime = currentTime;
       }
@@ -312,6 +309,7 @@ class AudioStreamer {
         for (let i = 0; i < float32Array.length; i++) {
           sum += float32Array[i] * float32Array[i];
         }
+        const rms = Math.sqrt(sum / float32Array.length);
         this.onOutputVolume(rms);
       }
     } catch (err) {
@@ -320,8 +318,8 @@ class AudioStreamer {
   }
 
   getRemainingPlaybackTime() {
-    if (!this.outputAudioContext) return 0;
-    const remaining = this.nextPlayTime - this.outputAudioContext.currentTime;
+    if (!this.audioContext) return 0;
+    const remaining = this.nextPlayTime - this.audioContext.currentTime;
     return remaining > 0 ? remaining : 0;
   }
 

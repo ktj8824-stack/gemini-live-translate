@@ -22,12 +22,24 @@ class ViewController: UIViewController, WKUIDelegate, WKNavigationDelegate {
     private func setupAudioSession() {
         let audioSession = AVAudioSession.sharedInstance()
         do {
-            // Allows microphone input while outputting speech to speaker / bluetooth
-            try audioSession.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothHFP, .allowBluetoothA2DP, .mixWithOthers])
+            // mode: .videoChat optimizes for loudspeaker output and prevents earpiece degradation
+            try audioSession.setCategory(.playAndRecord, mode: .videoChat, options: [.defaultToSpeaker, .allowBluetoothHFP, .allowBluetoothA2DP])
             try audioSession.overrideOutputAudioPort(.speaker)
             try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
         } catch {
             print("[AudioSession] Setup error: \(error)")
+        }
+
+        NotificationCenter.default.removeObserver(self, name: AVAudioSession.routeChangeNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(handleAudioRouteChange), name: AVAudioSession.routeChangeNotification, object: nil)
+    }
+
+    @objc private func handleAudioRouteChange(notification: Notification) {
+        let audioSession = AVAudioSession.sharedInstance()
+        do {
+            try audioSession.overrideOutputAudioPort(.speaker)
+        } catch {
+            print("[AudioSession] Route change override error: \(error)")
         }
     }
 

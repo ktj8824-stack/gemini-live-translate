@@ -282,20 +282,20 @@
         <div class="setting-item">
           <div class="setting-label">
             <strong>[자동 감지] 발화 멈춤 대기 시간</strong>
-            <p>자동 감지 모드에서 말 중간에 숨을 고르거나 생각할 때 조기 통역을 방지하기 위해 기다리는 시간</p>
+            <p>말이 끝난 후 번역을 확정하고 넘어가기 위해 기다리는 시간 (짧을수록 반응 속도 극대화)</p>
           </div>
           <select id="setting-pause-tolerance" class="lang-select-compact" style="background: rgba(15, 23, 42, 0.8);">
-            <option value="800">빠름 (0.8초 - 짧은 대화)</option>
-            <option value="1500">보통 (1.5초 - 일상 대화)</option>
-            <option value="2000" selected>여유 있게 (2.0초 - 추천/긴 문장)</option>
-            <option value="3000">매우 여유 (3.0초 - 생각하며 말하기)</option>
+            <option value="500">⚡ 초고속 반응 (0.5초 - 빠른 반응)</option>
+            <option value="800" selected>🚀 빠름 (0.8초 - 추천 / 자연스러운 대화)</option>
+            <option value="1200">보통 (1.2초 - 일반 대화)</option>
+            <option value="2000">여유 있게 (2.0초 - 생각하며 말하기)</option>
           </select>
         </div>
 
         <div class="setting-item">
           <div class="setting-label">
             <strong>[자동 감지] 스마트 긴 문장 보호</strong>
-            <p>자동 감지 모드에서 내가 아직 말하고 있는 도중에는 번역 음성이 끼어들지 않고 발화 종료 후 재생</p>
+            <p>말하는 도중 번역 음성이 끼어들지 않고, 말이 끝난 후 깨끗하게 통역 음성을 재생합니다 (기본 켜짐 권장)</p>
           </div>
           <label class="switch">
             <input type="checkbox" id="setting-smart-guard" checked>
