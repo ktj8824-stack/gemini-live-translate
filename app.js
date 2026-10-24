@@ -47,7 +47,7 @@ class LiveTranslatorApp {
     this.ws = null;
     this.isStreaming = false;
     this.currentMode = 'split';
-    
+
     this.userLang = 'ko';
     this.partnerLang = 'en';
 
@@ -63,7 +63,7 @@ class LiveTranslatorApp {
 
     // Speech & Turn Management (Handsfree vs PTT completely decoupled)
     this.speechMode = localStorage.getItem('gemini_speech_mode') || 'handsfree'; // 'handsfree' | 'ptt'
-    
+
     // [자동 감지 (Handsfree) 전용 설정 및 상태]
     const savedPause = localStorage.getItem('gemini_pause_tolerance');
     this.pauseTolerance = savedPause ? (parseInt(savedPause, 10) || 800) : 800;
@@ -105,7 +105,7 @@ class LiveTranslatorApp {
     this.learnedRules = JSON.parse(localStorage.getItem('gemini_learned_rules') || '[]');
     this.conversationContextSummary = localStorage.getItem('gemini_context_summary') || '';
     this.autoLearnDebounceTimer = null;
-    
+
     this.initElements();
     this.populateLanguageOptions();
     this.renderLearnedRules();
@@ -269,7 +269,7 @@ class LiveTranslatorApp {
 
   populateLanguageOptions() {
     const selects = [this.userLangSelect, this.partnerLangSelect, this.soloUserLang, this.soloTargetLang];
-    
+
     selects.forEach((sel) => {
       sel.innerHTML = '';
       SUPPORTED_LANGUAGES.forEach((lang) => {
@@ -1696,7 +1696,7 @@ Do not include markdown code block quotes. Output pure JSON only.`;
       this.ws.onclose = (ev) => {
         const reason = ev.reason || '';
         this.addDebugLog(`[WebSocket Closed] Code: ${ev.code}, Reason: ${reason || 'None'}`);
-        
+
         // 1. Google 10분 세션 최대 지속시간 만료 (GoAway 정상 세션 회전 - 오류 아님!)
         const isSessionLimit = reason.includes('GoAway') || reason.includes('session duration') || reason.includes('duration limit');
         if (isSessionLimit) {
@@ -1752,7 +1752,7 @@ Do not include markdown code block quotes. Output pure JSON only.`;
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       try {
         this.ws.close();
-      } catch (e) {}
+      } catch (e) { }
     }
     this.ws = null;
 
