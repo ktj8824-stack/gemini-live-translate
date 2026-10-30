@@ -292,15 +292,15 @@ class LiveTranslatorApp {
       onDebugLog: (msg) => this.addDebugLog(msg)
     });
 
-    this.learnedRules = JSON.parse(localStorage.getItem('gemini_learned_rules') || '[]');
-    this.conversationContextSummary = localStorage.getItem('gemini_context_summary') || '';
-    this.autoLearnDebounceTimer = null;
-    
+    // 용어집/AI 자동학습 기능 제거: 예전 버전이 남긴 저장 데이터 정리
+    try {
+      localStorage.removeItem('gemini_learned_rules');
+      localStorage.removeItem('gemini_context_summary');
+    } catch (e) {}
+
     this.initElements();
     this.populateLanguageOptions();
-    this.renderLearnedRules();
     this.renderHistory();
-    this.updateAiLearnBadge('idle');
     this.updateSpeechModeUI();
     this.bindEvents();
     this.setStatusPill('준비 완료 (마이크 터치)', '#10b981');
@@ -354,8 +354,6 @@ class LiveTranslatorApp {
     this.micIcon = document.getElementById('mic-icon');
     this.stopIcon = document.getElementById('stop-icon');
     this.statusPill = document.getElementById('connection-status-pill');
-    this.aiLearnIndicator = document.getElementById('ai-learn-indicator');
-    this.aiLearnCount = document.getElementById('ai-learn-count');
 
     // Dual Zone PTT Elements (Top Partner & Bottom User)
     this.partnerPttContainer = document.getElementById('partner-ptt-container');
@@ -366,10 +364,6 @@ class LiveTranslatorApp {
     this.userPttBtnText = document.getElementById('user-ptt-btn-text');
     this.currentPttSpeaker = 'user'; // 'user' | 'partner'
 
-    this.dictSourceInput = document.getElementById('dict-source-word');
-    this.dictTargetInput = document.getElementById('dict-target-word');
-    this.btnAddDictRule = document.getElementById('btn-add-dict-rule');
-    this.dictRulesList = document.getElementById('dict-rules-list');
 
 
     this.settingEchoToggle = document.getElementById('setting-echo-toggle');
@@ -578,10 +572,6 @@ class LiveTranslatorApp {
     this.btnSettingsToggle.addEventListener('click', () => this.settingsModal.classList.remove('hidden'));
     this.btnCloseSettings.addEventListener('click', () => this.settingsModal.classList.add('hidden'));
 
-    this.aiLearnIndicator?.addEventListener('click', () => {
-      this.settingsModal.classList.remove('hidden');
-    });
-
     // 예전 버전에서 기기에 저장된 API 키 흔적 제거
     try { localStorage.removeItem('gemini_api_key'); } catch (e) {}
 
@@ -612,11 +602,6 @@ class LiveTranslatorApp {
 
     this.settingAudioOut.addEventListener('change', (e) => {
       this.settings.audioOutputEnabled = e.target.checked;
-    });
-
-    this.btnAddDictRule?.addEventListener('click', () => this.addDictionaryRule());
-    this.dictTargetInput?.addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') this.addDictionaryRule();
     });
 
     // 앱 종료 및 화면 이탈 시 진행 중이던 대화 세션을 히스토리에 통째로 안전 자동 저장
@@ -802,9 +787,6 @@ class LiveTranslatorApp {
         this.profileProviderBadge.textContent = provMap[user.provider] || user.provider;
       }
 
-      this.learnedRules = JSON.parse(localStorage.getItem('gemini_learned_rules') || '[]');
-      this.conversationContextSummary = localStorage.getItem('gemini_context_summary') || '';
-      this.renderLearnedRules();
       this.renderHistory();
       this.addDebugLog(`[Auth] 계정 로그인 활성화: ${user.email}`);
     } else {
@@ -1017,7 +999,7 @@ class LiveTranslatorApp {
 본 약관은 Live Translate 서비스의 이용조건 및 절차, 이용자와 회사의 권리, 의무, 책임사항을 규정함을 목적으로 합니다.
 
 [제2조 (서비스의 내용)]
-1. Live Translate는 최신 인공지능(Google Gemini Live API)을 활용한 실시간 양방향 음성 동시통역 및 자막 피드, AI 맞춤 사전 학습 기능을 제공합니다.
+1. Live Translate는 최신 인공지능(Google Gemini Live API)을 활용한 실시간 양방향 음성 동시통역 및 자막 피드 기능을 제공합니다.
 2. 회원은 개인용 이어폰 모드 또는 테이블 대면 분할 모드를 통해 다국어 통역 서비스를 이용할 수 있습니다.
 
 [제3조 (이용계약 체결 및 계정 관리)]
@@ -1026,7 +1008,7 @@ class LiveTranslatorApp {
 
 [제4조 (지적재산권 및 데이터 보존)]
 1. 서비스 내의 모든 소프트웨어, 디자인, 상표 등의 지적재산권은 회사에 귀속됩니다.
-2. 이용자가 통역을 진행하며 생성된 맞춤 학습 사전 및 대화 세션 기록은 회원의 선택에 따라 클라우드에 암호화되어 안전하게 보관됩니다.
+2. 이용자가 통역을 진행하며 생성된 대화 세션 기록은 회원의 선택에 따라 클라우드에 암호화되어 안전하게 보관됩니다.
 
 [제5조 (책임의 한계)]
 AI 실시간 번역의 특성상 주변 소음, 발화 억양, 네트워크 환경에 따라 번역 결과의 정확도에 오차가 발생할 수 있으며, 회사는 이에 따른 법적 책임을 지지 않습니다.`;
@@ -1035,11 +1017,11 @@ AI 실시간 번역의 특성상 주변 소음, 발화 억양, 네트워크 환�
       this.termsModalBodyText.textContent = `[1. 수집하는 개인정보의 항목]
 - 간편 소셜 로그인 시: 이메일 주소, 프로필 닉네임, 프로필 사진 URL, 고유 사용자 식별자(UID)
 - 이메일 회원가입 시: 이메일 주소, 암호화된 비밀번호, 이름/닉네임
-- 서비스 이용 시 자동 생성: 실시간 통역 대화 세션 기록, AI 맞춤 학습 사전 단어, 접속 로그
+- 서비스 이용 시 자동 생성: 실시간 통역 대화 세션 기록, 접속 로그
 
 [2. 개인정보의 수집 및 이용 목적]
 - 사용자 식별 및 본인 확인
-- 기기간 대화 히스토리 및 AI 맞춤 학습 사전의 실시간 클라우드 동기화 서비스 제공
+- 기기간 대화 기록의 실시간 클라우드 동기화 서비스 제공
 - 오류 분석, 서비스 품질 향상 및 신규 AI 기능 안내
 
 [3. 개인정보의 보유 및 이용 기간]
@@ -1110,8 +1092,6 @@ AI 실시간 번역의 특성상 주변 소음, 발화 억양, 네트워크 환�
     this.addDebugLog('[Auth] 수동 동기화 요청...');
     await this.authService.syncToCloud();
     await this.authService.syncFromCloud();
-    this.learnedRules = JSON.parse(localStorage.getItem('gemini_learned_rules') || '[]');
-    this.renderLearnedRules();
     this.renderHistory();
   }
 
@@ -1578,152 +1558,7 @@ AI 실시간 번역의 특성상 주변 소음, 발화 억양, 네트워크 환�
     this.latencyBadge.textContent = `⏱ 지연 ${(lastMs / 1000).toFixed(1)}초 · 평균 ${(avgMs / 1000).toFixed(1)}초`;
   }
 
-  addDictionaryRule(sourceVal = null, targetVal = null) {
-    const src = (sourceVal || this.dictSourceInput?.value || '').trim();
-    const tgt = (targetVal || this.dictTargetInput?.value || '').trim();
-
-    if (!src || !tgt) {
-      alert('원문 단어와 맞춤 번역어를 모두 입력해주세요.');
-      return;
-    }
-
-    // Remove duplicates
-    this.learnedRules = this.learnedRules.filter(r => r.src.toLowerCase() !== src.toLowerCase());
-    this.learnedRules.unshift({ src, tgt, timestamp: Date.now() });
-    localStorage.setItem('gemini_learned_rules', JSON.stringify(this.learnedRules));
-
-    if (this.dictSourceInput) this.dictSourceInput.value = '';
-    if (this.dictTargetInput) this.dictTargetInput.value = '';
-
-    this.renderLearnedRules();
-    this.addDebugLog(`[AI Memory] New rule learned: "${src}" -> "${tgt}"`);
-    this.authService?.syncToCloud();
-  }
-
-  deleteDictionaryRule(src) {
-    this.learnedRules = this.learnedRules.filter(r => r.src !== src);
-    localStorage.setItem('gemini_learned_rules', JSON.stringify(this.learnedRules));
-    this.renderLearnedRules();
-    this.authService?.syncToCloud();
-  }
-
-  renderLearnedRules() {
-    if (!this.dictRulesList) return;
-    if (this.learnedRules.length === 0) {
-      this.dictRulesList.innerHTML = '<span style="font-size: 0.8rem; color: #64748b;">아직 등록된 맞춤 학습 단어가 없습니다.</span>';
-      return;
-    }
-
-    this.dictRulesList.innerHTML = '';
-    this.learnedRules.forEach(rule => {
-      const row = document.createElement('div');
-      row.style.cssText = 'display:flex; justify-content:space-between; align-items:center; background:rgba(255,255,255,0.05); padding: 5px 10px; border-radius: 6px; font-size: 0.82rem;';
-      row.innerHTML = `
-        <span><strong style="color:#00e5ff;">${rule.src}</strong> ➔ <span style="color:#a78bfa;">${rule.tgt}</span></span>
-        <button class="rule-del-btn" style="background:none; border:none; color:#ef4444; cursor:pointer; font-size:0.9rem;">✕</button>
-      `;
-      row.querySelector('.rule-del-btn').addEventListener('click', () => this.deleteDictionaryRule(rule.src));
-      this.dictRulesList.appendChild(row);
-    });
-  }
-
-  getSystemInstructionText() {
-    let customGlossary = '';
-    if (this.learnedRules && this.learnedRules.length > 0) {
-      const topRules = this.learnedRules.slice(0, 8);
-      customGlossary = ` Key Terms: ` + topRules.map(r => `"${r.src}"->"${r.tgt}"`).join(', ');
-    }
-
-    return `Realtime simultaneous interpreter. Translate directly to ${this.partnerLang}. No intro/chitchat.${customGlossary}`;
-  }
-
-  updateAiLearnBadge(status = 'idle', count = null) {
-    if (!this.aiLearnIndicator) return;
-    const ruleCount = count ?? this.learnedRules.length;
-    if (this.aiLearnCount) this.aiLearnCount.textContent = ruleCount;
-
-    const textEl = this.aiLearnIndicator.querySelector('.ai-learn-text');
-
-    if (status === 'learning') {
-      this.aiLearnIndicator.className = 'ai-learning-pill learning';
-      if (textEl) textEl.textContent = 'AI 학습중';
-    } else if (status === 'success') {
-      this.aiLearnIndicator.className = 'ai-learning-pill success';
-      if (textEl) textEl.textContent = '학습 완료';
-      setTimeout(() => {
-        this.updateAiLearnBadge('idle');
-      }, 3000);
-    } else {
-      this.aiLearnIndicator.className = 'ai-learning-pill idle';
-      if (textEl) textEl.textContent = 'AI 기억 ' + ruleCount;
-    }
-  }
-
-  async triggerAutoLearn() {
-    if (this.history.length === 0) return;
-
-    this.updateAiLearnBadge('learning');
-
-    try {
-      this.addDebugLog('[Auto AI] Background learning analyzing conversation...');
-      const recentTurns = this.history.slice(-10);
-
-      const geminiRes = await fetch(`${API_BASE}/api/learn-auto`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ history: recentTurns, currentRules: this.learnedRules || [] })
-      });
-
-      if (!geminiRes.ok) {
-        this.updateAiLearnBadge('idle');
-        return;
-      }
-      let data = {};
-      try {
-        data = await geminiRes.json();
-      } catch (e) {
-        data = {};
-      }
-
-      let newlyAdded = 0;
-      if (data.contextSummary) {
-        this.conversationContextSummary = data.contextSummary;
-        localStorage.setItem('gemini_context_summary', this.conversationContextSummary);
-      }
-
-      if (Array.isArray(data.extractedRules)) {
-        data.extractedRules.forEach(rule => {
-          if (!rule.src || !rule.tgt) return;
-          const exists = this.learnedRules.some(r => r.src.toLowerCase() === rule.src.toLowerCase());
-          if (!exists) {
-            this.learnedRules.unshift({
-              src: rule.src,
-              tgt: rule.tgt,
-              reason: rule.reason || '대화에서 AI가 자율 학습함',
-              autoLearned: true,
-              timestamp: Date.now()
-            });
-            newlyAdded++;
-          }
-        });
-      }
-
-      if (newlyAdded > 0) {
-        localStorage.setItem('gemini_learned_rules', JSON.stringify(this.learnedRules));
-        this.renderLearnedRules();
-        this.addDebugLog(`✨ [자율 학습 완료] AI가 새로운 용어/규칙 ${newlyAdded}개를 자동 습득했습니다!`);
-        this.showAutoLearnToast(`🧠 AI가 새로운 단어 ${newlyAdded}개를 자동 학습했습니다!`);
-        this.updateAiLearnBadge('success');
-      } else {
-        this.updateAiLearnBadge('idle');
-      }
-    } catch (e) {
-      console.warn('[AutoLearn] Background analysis error:', e);
-      this.updateAiLearnBadge('idle');
-    }
-  }
-
-  showAutoLearnToast(msg) {
+  showToastBubble(msg) {
     const toast = document.createElement('div');
     toast.style.cssText = 'position:fixed; bottom:20px; right:20px; background:linear-gradient(135deg, #00e5ff, #8b5cf6); color:#000; font-weight:700; padding:10px 18px; border-radius:30px; box-shadow:0 8px 24px rgba(0,0,0,0.5); z-index:9999; font-size:0.85rem; animation:fadeIn 0.3s ease-in-out;';
     toast.textContent = msg;
@@ -1975,14 +1810,6 @@ AI 실시간 번역의 특성상 주변 소음, 발화 억양, 네트워크 환�
 
     this.updateStatusUI(false);
     this.flushCurrentTurnToHistory();
-
-    // Trigger AI Learning analysis immediately on stop
-    if (this.history.length > 0) {
-      this.triggerAutoLearn();
-    } else {
-      // If no speech history was recorded yet, briefly show idle
-      this.updateAiLearnBadge('idle');
-    }
   }
 
   sendAudioChunk(base64Data) {
@@ -2461,7 +2288,7 @@ AI 실시간 번역의 특성상 주변 소음, 발화 억양, 네트워크 환�
   }
 
   showToast(msg) {
-    this.showAutoLearnToast(msg);
+    this.showToastBubble(msg);
   }
 
   appendFeedBubble(item) {
@@ -2521,7 +2348,6 @@ AI 실시간 번역의 특성상 주변 소음, 발화 억양, 네트워크 환�
             </div>
             <div class="history-session-actions">
               <button class="history-session-btn btn-copy-session" title="이 대화 세션 전체 복사">📋 복사</button>
-              <button class="history-session-btn btn-learn-session" style="color:#00e5ff;" title="이 세션의 대화들을 AI 학습에 반영">🧠 학습</button>
             </div>
           </div>
           <div class="history-session-turns-list">
@@ -2541,17 +2367,6 @@ AI 실시간 번역의 특성상 주변 소음, 발화 억양, 네트워크 환�
           });
         });
 
-        // 세션 AI 맞춤 학습 버튼
-        sessionCard.querySelector('.btn-learn-session')?.addEventListener('click', () => {
-          if (turns.length === 0) return;
-          const firstTurn = turns[0];
-          const correctTarget = prompt(`AI가 기억해야 할 올바른 맞춤 번역 단어나 표현을 입력해주세요:\n(예: ${firstTurn.original} ➔ ...)`);
-          if (correctTarget && correctTarget.trim()) {
-            this.addDictionaryRule(firstTurn.original, correctTarget.trim());
-            alert(`✅ AI 학습 완료! 다음 통역부터 즉시 맞춤 적용됩니다.`);
-          }
-        });
-
         this.historyList.appendChild(sessionCard);
       } else {
         // 2. 구버전 낱개 단일 턴 데이터 하위 호환
@@ -2560,19 +2375,10 @@ AI 실시간 번역의 특성상 주변 소음, 발화 억양, 네트워크 환�
         el.innerHTML = `
           <div style="display:flex; justify-content:space-between; align-items:center;">
             <div class="speaker">${session.time || ''} [${session.fromLang || ''} ➔ ${session.toLang || ''}]</div>
-            <button class="learn-btn" style="background:rgba(0,229,255,0.15); border:1px solid #00e5ff; color:#00e5ff; padding:2px 8px; border-radius:4px; font-size:0.75rem; cursor:pointer;" title="이 대화를 맞춤 번역 규칙으로 AI에 학습">🧠 AI 학습</button>
           </div>
           <div class="text-main">${this.escapeHtml(session.translated || session.original || '')}</div>
           <div class="text-sub">원문: ${this.escapeHtml(session.original || '')}</div>
         `;
-
-        el.querySelector('.learn-btn')?.addEventListener('click', () => {
-          const correctTarget = prompt(`"${session.original}"에 대해 AI가 기억해야 할 올바른 번역을 입력해주세요:`, session.translated);
-          if (correctTarget && correctTarget.trim()) {
-            this.addDictionaryRule(session.original, correctTarget.trim());
-            alert(`✅ AI 학습 완료!`);
-          }
-        });
 
         this.historyList.appendChild(el);
       }

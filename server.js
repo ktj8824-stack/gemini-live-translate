@@ -16,7 +16,6 @@ const PORT = process.env.PORT || 3000;
 // Gemini API 키는 오직 서버(.env)에만 둡니다. 클라이언트에는 절대 전달하지 않습니다.
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const LIVE_MODEL = 'models/gemini-3.5-live-translate-preview';
-const LEARN_MODEL = process.env.LEARN_MODEL || 'gemini-3.6-flash';
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 
 // 허용할 웹 출처 (쉼표 구분). iOS 앱(WKWebView, file://)은 Origin이 "null"로 옵니다.
@@ -137,74 +136,6 @@ app.post('/api/live-token', rateLimit({ windowMs: 60_000, max: 20 }), async (req
   } catch (err) {
     console.error('[LiveToken] Error:', err);
     res.status(500).json({ error: '통역 토큰 발급 중 오류가 발생했습니다.' });
-  }
-});
-
-// ---------------------------------------------------------------------------
-// AI 자동 학습 (대화에서 용어/맥락 추출) - 서버 키로만 호출
-// ---------------------------------------------------------------------------
-app.post('/api/learn-auto', rateLimit({ windowMs: 60_000, max: 10 }), async (req, res) => {
-  try {
-    if (!GEMINI_API_KEY) {
-      return res.status(500).json({ error: '서버에 Gemini API 키가 설정되지 않았습니다.' });
-    }
-
-    const history = Array.isArray(req.body?.history) ? req.body.history.slice(-10) : [];
-    const currentRules = Array.isArray(req.body?.currentRules) ? req.body.currentRules.slice(0, 100) : [];
-
-    if (history.length === 0) {
-      return res.json({ contextSummary: '', extractedRules: [] });
-    }
-
-    const prompt = `You are an Autonomous AI Linguist & Memory Engine.
-Analyze the following bilingual conversation transcript between two users:
-${JSON.stringify(history, null, 2)}
-
-Already known memory rules:
-${JSON.stringify(currentRules)}
-
-Tasks:
-1. Identify any key proper nouns, brand names, technical/specialized terms, jargon, slang, or recurring phrases that need consistent, accurate future translation.
-2. Summarize the ongoing context / domain of the conversation in 1 concise sentence (e.g. "Real estate contract negotiation with a US client").
-3. Output ONLY a valid JSON object matching this schema:
-{
-  "contextSummary": "1 sentence domain/context summary",
-  "extractedRules": [
-    { "src": "original phrase/term", "tgt": "ideal translation", "reason": "why this should be remembered" }
-  ]
-}
-Do not include markdown code block quotes. Output pure JSON only.`;
-
-    const geminiRes = await fetch(`${GEMINI_BASE}/models/${LEARN_MODEL}:generateContent`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': GEMINI_API_KEY
-      },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { responseMimeType: 'application/json' }
-      })
-    });
-
-    const data = await geminiRes.json().catch(() => ({}));
-    if (!geminiRes.ok) {
-      console.error('[AutoLearn] Gemini 오류:', geminiRes.status, JSON.stringify(data));
-      return res.status(502).json({ error: 'AI 학습 요청이 실패했습니다.' });
-    }
-
-    const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
-    let parsed = {};
-    try {
-      parsed = JSON.parse(rawText);
-    } catch (e) {
-      console.error('[AutoLearn] JSON parse error:', e.message);
-    }
-
-    res.json(parsed);
-  } catch (err) {
-    console.error('[AutoLearn] Error:', err);
-    res.status(500).json({ error: 'AI 학습 중 오류가 발생했습니다.' });
   }
 });
 

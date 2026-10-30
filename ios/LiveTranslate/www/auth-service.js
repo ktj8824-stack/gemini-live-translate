@@ -425,16 +425,6 @@
               localStorage.setItem('gemini_history', JSON.stringify(mergedHist));
             }
 
-            // 학습된 AI 룰 병합
-            if (data.learnedRules && Array.isArray(data.learnedRules)) {
-              const localRules = JSON.parse(localStorage.getItem('gemini_learned_rules') || '[]');
-              const mergedRules = this.mergeRules(localRules, data.learnedRules);
-              localStorage.setItem('gemini_learned_rules', JSON.stringify(mergedRules));
-            }
-
-            if (data.contextSummary) {
-              localStorage.setItem('gemini_context_summary', data.contextSummary);
-            }
           } else {
             this.log('클라우드에 기존 데이터 없음 -> 현재 로컬 데이터 업로드');
             await this.syncToCloud();
@@ -445,10 +435,6 @@
           if (userVault.history) {
             const localHist = JSON.parse(localStorage.getItem('gemini_history') || '[]');
             localStorage.setItem('gemini_history', JSON.stringify(this.mergeSessions(localHist, userVault.history)));
-          }
-          if (userVault.learnedRules) {
-            const localRules = JSON.parse(localStorage.getItem('gemini_learned_rules') || '[]');
-            localStorage.setItem('gemini_learned_rules', JSON.stringify(this.mergeRules(localRules, userVault.learnedRules)));
           }
         }
 
@@ -466,8 +452,6 @@
 
       try {
         const history = JSON.parse(localStorage.getItem('gemini_history') || '[]');
-        const learnedRules = JSON.parse(localStorage.getItem('gemini_learned_rules') || '[]');
-        const contextSummary = localStorage.getItem('gemini_context_summary') || '';
 
         if (this.isFirebaseReady && this.firestoreDb && this.doc && this.setDoc) {
           const userDocRef = this.doc(this.firestoreDb, 'users', this.currentUser.uid);
@@ -475,14 +459,12 @@
             email: this.currentUser.email,
             displayName: this.currentUser.displayName,
             history,
-            learnedRules,
-            contextSummary,
             updatedAt: Date.now()
           }, { merge: true });
           this.log('Firestore 클라우드 백업 완료');
         } else {
           // 로컬 볼트 백업
-          const vault = { history, learnedRules, contextSummary, updatedAt: Date.now() };
+          const vault = { history, updatedAt: Date.now() };
           localStorage.setItem(`gemini_vault_${this.currentUser.uid}`, JSON.stringify(vault));
         }
 
@@ -506,16 +488,6 @@
       return Array.from(map.values()).sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
     }
 
-    mergeRules(listA, listB) {
-      const map = new Map();
-      for (const r of listB) {
-        if (r && r.src) map.set(r.src.toLowerCase(), r);
-      }
-      for (const r of listA) {
-        if (r && r.src) map.set(r.src.toLowerCase(), r);
-      }
-      return Array.from(map.values()).sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-    }
   }
 
   window.AuthService = AuthService;
