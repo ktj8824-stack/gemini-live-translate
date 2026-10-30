@@ -39,8 +39,26 @@ const SUPPORTED_LANGUAGES = [
   { code: 'sk', name: '슬로바키아어 (Slovak)', flag: '🇸🇰' }
 ];
 
-// Fixed Default Gemini API Key (Decoded at runtime to protect from git secret scanning)
-const FIXED_GEMINI_API_KEY = atob('QVEuQWI4Uk42THhqQ2dvYVZaVXpjcHo3M211SUxwMlA1dFM2TTY5STdid01LU3ZQZFZqVXc=');
+// =========================================================================
+// 서버 주소 설정
+// - 웹(서버에서 직접 서빙): 같은 서버(상대 경로)를 사용
+// - iOS 앱(file://): window.TALK_API_BASE 에 배포된 서버 주소를 넣어야 함 (config.js)
+// Gemini API 키는 서버에만 있고, 앱은 서버에서 1회용 임시 토큰만 받아 사용합니다.
+// =========================================================================
+const API_BASE = (window.TALK_API_BASE || '').replace(/\/$/, '');
+const LIVE_MODEL = 'models/gemini-3.5-live-translate-preview';
+const GEMINI_LIVE_WS = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained';
+
+async function fetchLiveToken() {
+  const res = await fetch(`${API_BASE}/api/live-token`, { method: 'POST' });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.token) {
+    const err = new Error(data.error || `통역 서버 연결 실패 (${res.status})`);
+    err.status = res.status;
+    throw err;
+  }
+  return data.token;
+}
 
 class LiveTranslatorApp {
   constructor() {
@@ -54,7 +72,6 @@ class LiveTranslatorApp {
     this.chunksSent = 0;
     this.chunksReceived = 0;
 
-    this.apiKey = FIXED_GEMINI_API_KEY;
     this.settings = {
       echoTargetLanguage: false,
       audioOutputEnabled: true,
@@ -113,7 +130,7 @@ class LiveTranslatorApp {
     this.updateAiLearnBadge('idle');
     this.updateSpeechModeUI();
     this.bindEvents();
-    this.checkApiKey();
+    this.setStatusPill('준비 완료 (마이크 터치)', '#10b981');
     this.initAuthService();
   }
 
@@ -181,10 +198,6 @@ class LiveTranslatorApp {
     this.btnAddDictRule = document.getElementById('btn-add-dict-rule');
     this.dictRulesList = document.getElementById('dict-rules-list');
 
-    this.inputApiKey = document.getElementById('input-api-key');
-    if (this.inputApiKey) {
-      this.inputApiKey.value = this.apiKey;
-    }
 
     this.settingEchoToggle = document.getElementById('setting-echo-toggle');
     if (this.settingEchoToggle) {
@@ -396,15 +409,8 @@ class LiveTranslatorApp {
       this.settingsModal.classList.remove('hidden');
     });
 
-    if (this.inputApiKey) {
-      this.inputApiKey.addEventListener('input', (e) => {
-        this.apiKey = e.target.value.trim();
-        localStorage.setItem('gemini_api_key', this.apiKey);
-        if (this.apiKey) {
-          this.setStatusPill('준비 완료 (마이크 터치)', '#10b981');
-        }
-      });
-    }
+    // 예전 버전에서 기기에 저장된 API 키 흔적 제거
+    try { localStorage.removeItem('gemini_api_key'); } catch (e) {}
 
     // Pause Tolerance & Smart Guard listeners
     this.settingPauseTolerance?.addEventListener('change', (e) => {
@@ -1159,15 +1165,10 @@ AI 실시간 번역의 특성상 주변 소음, 발화 억양, 네트워크 환�
       setTimeout(() => {
         if (this.ws && this.ws.readyState === WebSocket.OPEN && !this.isPttHolding) {
           const payload = {
-            realtime_input: {
-              media_chunks: [
-                {
-                  mime_type: 'audio/pcm;rate=16000',
-                  data: silenceBase64
-                }
-              ]
-            }
-          };
+        realtimeInput: {
+          audio: { mimeType: 'audio/pcm;rate=16000', data: silenceBase64 }
+        }
+      };
           this.ws.send(JSON.stringify(payload));
           this.addDebugLog(`[VAD] 무음 종결 신호 전송 (${i + 1}/${count})`);
         }
@@ -1234,14 +1235,17 @@ AI 실시간 번역의 특성상 주변 소음, 발화 억양, 네트워크 환�
       customGlossary = `\nCustom Glossary & Key Terms:\n` + topRules.map(r => `- "${r.src}" -> "${r.tgt}"`).join('\n');
     }
 
+    // 공식 문서 형식: AUDIO 출력 + 입력/출력 자막(transcription) 활성화
     const setupMessage = {
       setup: {
-        model: 'models/gemini-3.5-live-translate-preview',
-        generation_config: {
-          response_modalities: ['AUDIO', 'TEXT'],
-          translation_config: {
-            target_language_code: tgt,
-            echo_target_language: this.settings.echoTargetLanguage
+        model: LIVE_MODEL,
+        generationConfig: {
+          responseModalities: ['AUDIO'],
+          inputAudioTranscription: {},
+          outputAudioTranscription: {},
+          translationConfig: {
+            targetLanguageCode: tgt,
+            echoTargetLanguage: this.settings.echoTargetLanguage
           }
         }
       }
@@ -1470,43 +1474,19 @@ AI 실시간 번역의 특성상 주변 소음, 발화 억양, 네트워크 환�
       this.addDebugLog('[Auto AI] Background learning analyzing conversation...');
       const recentTurns = this.history.slice(-10);
 
-      const prompt = `You are an Autonomous AI Linguist & Memory Engine.
-Analyze the following bilingual conversation transcript between two users:
-${JSON.stringify(recentTurns, null, 2)}
-
-Already known memory rules:
-${JSON.stringify(this.learnedRules || [])}
-
-Tasks:
-1. Identify any key proper nouns, brand names, technical/specialized terms, jargon, slang, or recurring phrases that need consistent, accurate future translation.
-2. Summarize the ongoing context / domain of the conversation in 1 concise sentence (e.g. "Real estate contract negotiation with a US client").
-3. Output ONLY a valid JSON object matching this schema:
-{
-  "contextSummary": "1 sentence domain/context summary",
-  "extractedRules": [
-    { "src": "original phrase/term", "tgt": "ideal translation", "reason": "why this should be remembered" }
-  ]
-}
-Do not include markdown code block quotes. Output pure JSON only.`;
-
-      const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${this.apiKey}`, {
+      const geminiRes = await fetch(`${API_BASE}/api/learn-auto`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { responseMimeType: 'application/json' }
-        })
+        body: JSON.stringify({ history: recentTurns, currentRules: this.learnedRules || [] })
       });
 
       if (!geminiRes.ok) {
         this.updateAiLearnBadge('idle');
         return;
       }
-      const rawData = await geminiRes.json();
-      const rawText = rawData?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
       let data = {};
       try {
-        data = JSON.parse(rawText);
+        data = await geminiRes.json();
       } catch (e) {
         data = {};
       }
@@ -1561,17 +1541,6 @@ Do not include markdown code block quotes. Output pure JSON only.`;
     }, 3500);
   }
 
-  checkApiKey() {
-    if (!this.apiKey) {
-      setTimeout(() => {
-        this.settingsModal.classList.remove('hidden');
-        this.setStatusPill('API 키 입력 필요', '#f59e0b');
-      }, 400);
-    } else {
-      this.setStatusPill('준비 완료 (마이크 터치)', '#10b981');
-    }
-  }
-
   setMode(mode) {
     this.currentMode = mode;
     if (mode === 'split') {
@@ -1620,8 +1589,6 @@ Do not include markdown code block quotes. Output pure JSON only.`;
 
   async startStreaming() {
     try {
-      this.apiKey = this.apiKey || FIXED_GEMINI_API_KEY;
-
       this.chunksSent = 0;
       this.chunksReceived = 0;
       this.updateStatusUI(true);
@@ -1648,13 +1615,25 @@ Do not include markdown code block quotes. Output pure JSON only.`;
       // 2. Connect to Gemini Live Translate WebSocket
       this.setStatusPill('Gemini 통역 서버 연결 중...', 'orange');
       this.streamStatusLabel.textContent = '마이크 정상 감지 중 🎙️ | Gemini 연결 중...';
-      this.addDebugLog(`[Gemini] Connecting directly to Live Translate (${this.partnerLang})...`);
+      this.addDebugLog(`[Gemini] 서버에서 임시 토큰 발급 중... (${this.partnerLang})`);
 
-      const geminiUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${this.apiKey}`;
+      let liveToken;
+      try {
+        liveToken = await fetchLiveToken();
+      } catch (tokenErr) {
+        this.addDebugLog(`[Token Error] ${tokenErr.message}`);
+        this.setStatusPill(tokenErr.status === 429 ? '잠시 후 다시 시도' : '통역 서버 연결 실패', '#f43f5e');
+        this.stopStreaming();
+        setTimeout(() => alert(`⚠️ ${tokenErr.message}`), 100);
+        return;
+      }
+      if (!this.isStreaming) return; // 토큰 받는 사이 사용자가 중지한 경우
+
+      const geminiUrl = `${GEMINI_LIVE_WS}?access_token=${encodeURIComponent(liveToken)}`;
       this.ws = new WebSocket(geminiUrl);
 
       this.ws.onopen = async () => {
-        this.addDebugLog('[WebSocket] Connected directly to Gemini! Sending setup...');
+        this.addDebugLog('[WebSocket] Gemini 연결 완료 (임시 토큰). Sending setup...');
         this.setStatusPill('세션 구성 중...', 'cyan');
 
         const srcLangObj = SUPPORTED_LANGUAGES.find(l => l.code === this.userLang);
@@ -1715,10 +1694,10 @@ Do not include markdown code block quotes. Output pure JSON only.`;
         let alertMessage = null;
         if (ev.code === 1011 || reason.includes('prepayment credits are depleted') || reason.includes('credits')) {
           this.setStatusPill('API 크레딧 소진', '#f43f5e');
-          alertMessage = '⚠️ 구글 Gemini API 키의 크레딧/한도가 소진되었습니다.\n\n새로운 Gemini API 키를 발급받으신 후 상단 설정(⚙️) 아이콘을 눌러 새 키를 입력해 주세요.';
+          alertMessage = '⚠️ 통역 서비스 사용량 한도에 도달했습니다.\n\n잠시 후 다시 시도해 주세요. 계속되면 관리자에게 문의해 주세요.';
         } else if ((ev.code === 1006 || ev.code === 1007 || ev.code === 1008) && !reason.includes('normal')) {
-          this.setStatusPill('API 인증 실패', '#f43f5e');
-          alertMessage = `⚠️ Gemini API 연결 실패 (코드 ${ev.code})\n\nAPI 키가 올바른지 확인하거나 새로운 키로 변경해 주세요.\n사유: ${reason || '인증/네트워크 오류'}`;
+          this.setStatusPill('통역 연결 실패', '#f43f5e');
+          alertMessage = `⚠️ 통역 서버 연결 실패 (코드 ${ev.code})\n\n네트워크 상태를 확인한 뒤 다시 시도해 주세요.\n사유: ${reason || '인증/네트워크 오류'}`;
         } else if (ev.code !== 1000) {
           this.setStatusPill('연결 종료', '#94a3b8');
         } else {
@@ -1733,8 +1712,8 @@ Do not include markdown code block quotes. Output pure JSON only.`;
       };
 
       this.ws.onerror = (err) => {
-        this.addDebugLog(`[WebSocket Error] Connection failed. Check API Key/Network.`);
-        this.setStatusPill('통신 오류 (API 키 확인)', '#f43f5e');
+        this.addDebugLog(`[WebSocket Error] Connection failed. Check network/server.`);
+        this.setStatusPill('통신 오류', '#f43f5e');
         this.stopStreaming();
       };
 
@@ -1778,13 +1757,8 @@ Do not include markdown code block quotes. Output pure JSON only.`;
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.chunksSent++;
       const payload = {
-        realtime_input: {
-          media_chunks: [
-            {
-              mime_type: 'audio/pcm;rate=16000',
-              data: base64Data
-            }
-          ]
+        realtimeInput: {
+          audio: { mimeType: 'audio/pcm;rate=16000', data: base64Data }
         }
       };
       this.ws.send(JSON.stringify(payload));
