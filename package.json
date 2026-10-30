@@ -11,7 +11,6 @@
   "dependencies": {
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
-    "localtunnel": "^2.0.2",
-    "ws": "^8.18.0"
+    "localtunnel": "^2.0.2"
   }
 }
