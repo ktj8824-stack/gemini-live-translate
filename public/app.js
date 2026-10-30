@@ -1,5 +1,5 @@
 /**
- * Gemini Live Translate Frontend Application
+ * Live Translate Frontend Application
  * Handles both Text, Blob & ArrayBuffer WebSocket data safely
  */
 
@@ -88,7 +88,7 @@ function buildLiveSetupMessage(targetLang, echoTargetLanguage) {
 }
 
 /**
- * Gemini Live Translate 세션 1개 (= 번역 방향 1개)
+ * Live Translate 통역 세션 1개 (= 번역 방향 1개)
  * - 서버 준비 완료(setupComplete) 전에는 음성을 보내지 않고 잠시 보관했다가 한 번에 전송
  * - 준비 시간 초과/끊김은 onClose로 알려 앱이 재연결하도록 함
  */
@@ -638,10 +638,14 @@ class LiveTranslatorApp {
     });
 
     // 1. 시작 스플래시 인트로 종료 시 -> 미로그인 사용자에게 로그인 모달 자동 표시
+    // 시작 화면이 끝나면 로그인 없이 바로 사용 (로그인은 우측 상단 버튼에서 언제든 가능)
     window.addEventListener('app:splashFinished', () => {
-      if (!this.authService || !this.authService.currentUser) {
-        this.toggleAuthModal(true);
-      }
+      try {
+        if (!localStorage.getItem('lt_login_hint_shown') && (!this.authService || !this.authService.currentUser)) {
+          localStorage.setItem('lt_login_hint_shown', '1');
+          setTimeout(() => this.showToast('로그인하면 대화 기록이 동기화돼요'), 600);
+        }
+      } catch (e) {}
     });
 
     // 2. Auth & Cloud Sync Modal Events
@@ -1008,12 +1012,12 @@ class LiveTranslatorApp {
     if (!this.termsModal || !this.termsModalTitle || !this.termsModalBodyText) return;
 
     if (type === 'service') {
-      this.termsModalTitle.textContent = '번역톡 서비스 이용약관 (전문)';
+      this.termsModalTitle.textContent = 'Live Translate 서비스 이용약관 (전문)';
       this.termsModalBodyText.textContent = `[제1조 (목적)]
-본 약관은 번역톡(Gemini Live Translate) 서비스의 이용조건 및 절차, 이용자와 회사의 권리, 의무, 책임사항을 규정함을 목적으로 합니다.
+본 약관은 Live Translate 서비스의 이용조건 및 절차, 이용자와 회사의 권리, 의무, 책임사항을 규정함을 목적으로 합니다.
 
 [제2조 (서비스의 내용)]
-1. 번역톡은 최신 인공지능(Google Gemini Live API)을 활용한 실시간 양방향 음성 동시통역 및 자막 피드, AI 맞춤 사전 학습 기능을 제공합니다.
+1. Live Translate는 최신 인공지능(Google Gemini Live API)을 활용한 실시간 양방향 음성 동시통역 및 자막 피드, AI 맞춤 사전 학습 기능을 제공합니다.
 2. 회원은 개인용 이어폰 모드 또는 테이블 대면 분할 모드를 통해 다국어 통역 서비스를 이용할 수 있습니다.
 
 [제3조 (이용계약 체결 및 계정 관리)]
@@ -1271,7 +1275,7 @@ AI 실시간 번역의 특성상 주변 소음, 발화 억양, 네트워크 환�
     // 3. 버튼 active 시각 효과 및 라벨 복원
     this.btnPttPartner?.classList.remove('ptt-active');
     this.btnPttUser?.classList.remove('ptt-active');
-    if (this.partnerPttBtnText) this.partnerPttBtnText.textContent = '누르고 말하기 (Guest)';
+    if (this.partnerPttBtnText) this.partnerPttBtnText.textContent = 'Hold to talk';
     if (this.userPttBtnText) this.userPttBtnText.textContent = '누르고 말하기 (나)';
     this.btnToggleStream?.classList.remove('ptt-active');
     this.btnSoloMic?.classList.remove('ptt-active');
@@ -1406,7 +1410,7 @@ AI 실시간 번역의 특성상 주변 소음, 발화 억양, 네트워크 환�
     // 1. 버튼 눌림 시각 효과 해제 및 라벨 복원
     this.btnPttPartner?.classList.remove('ptt-active');
     this.btnPttUser?.classList.remove('ptt-active');
-    if (this.partnerPttBtnText) this.partnerPttBtnText.textContent = '누르고 말하기 (Guest)';
+    if (this.partnerPttBtnText) this.partnerPttBtnText.textContent = 'Hold to talk';
     if (this.userPttBtnText) this.userPttBtnText.textContent = '누르고 말하기 (나)';
 
     this.btnToggleStream?.classList.remove('ptt-active');
@@ -1564,7 +1568,7 @@ AI 실시간 번역의 특성상 주변 소음, 발화 억양, 네트워크 환�
     if (!this.latencyBadge && this.statusPill) {
       this.latencyBadge = document.createElement('div');
       this.latencyBadge.id = 'latency-badge';
-      this.latencyBadge.className = 'model-badge';
+      this.latencyBadge.className = 'status-chip';
       this.latencyBadge.title = '말이 끝난 뒤 번역 음성이 나오기까지 걸린 시간 (최근 10회 평균)';
       this.statusPill.insertAdjacentElement('afterend', this.latencyBadge);
     }
@@ -1803,8 +1807,8 @@ AI 실시간 번역의 특성상 주변 소음, 발화 억양, 네트워크 환�
       }
 
       // 2. 번역 방향별 Gemini 세션 연결 (누르고 말하기는 양방향 2개를 미리 열어둠)
-      this.setStatusPill('Gemini 통역 서버 연결 중...', 'orange');
-      this.streamStatusLabel.textContent = '마이크 정상 감지 중 🎙️ | Gemini 연결 중...';
+      this.setStatusPill('통역 서버 연결 중...', 'orange');
+      this.streamStatusLabel.textContent = '마이크 연결됨 🎙️ · 통역 서버 연결 중...';
       this.ensureSessions();
     } catch (err) {
       this.addDebugLog(`[Start Error] ${err.message}`);

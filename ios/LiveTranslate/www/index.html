@@ -6,13 +6,13 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
-  <title>Gemini Live Translate - 실시간 동시통역</title>
+  <title>Live Translate - 실시간 동시통역</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@300;400;500;600;700;800&family=Outfit:wght@400;600;700;800&display=swap" rel="stylesheet">
   <link rel="icon" type="image/png" href="app-icon.png">
   <link rel="apple-touch-icon" href="app-icon.png">
-  <link rel="stylesheet" href="styles.css?v=2.0.0">
+  <link rel="stylesheet" href="styles.css?v=2.2.0">
 </head>
 <body class="mode-split">
   <!-- App Splash & Motion Intro Screen -->
@@ -25,14 +25,14 @@
       <div class="splash-brand-badge">
         <div class="splash-logo-glow"></div>
         <div class="splash-logo-core app-icon-core">
-          <img src="app-icon.png" alt="번역톡 앱 아이콘" class="splash-app-icon">
+          <img src="app-icon.png" alt="Live Translate 앱 아이콘" class="splash-app-icon">
         </div>
       </div>
       
       <div class="splash-text-group">
         <h1 class="splash-title">
-          <span class="gradient-text">Gemini</span>
-          <span class="splash-title-sub">Live Translate</span>
+          <span class="gradient-text">Live</span>
+          <span class="splash-title-sub">Translate</span>
         </h1>
         <div class="splash-tagline">
           <span class="tagline-dot"></span>
@@ -62,9 +62,7 @@
         <span class="sparkle-icon">✨</span>
       </div>
       <div class="brand-text">
-        <h1 class="brand-title">Gemini</h1>
-        <span class="brand-subtitle">Live Translate</span>
-        <div id="connection-status-pill" class="model-badge">대기 중...</div>
+        <h1 class="brand-title">Live <span class="brand-title-accent">Translate</span></h1>
       </div>
     </div>
 
@@ -73,11 +71,11 @@
       <div class="segmented-control">
         <button id="btn-mode-split" class="segment active" title="테이블 대면 분할 화면 (상대방 180도 반전)">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M4 7l8-5 8 5M4 17l8 5 8-5"/></svg>
-          <span>대면 모드</span>
+          <span class="segment-label">대면<span class="label-long"> 모드</span></span>
         </button>
         <button id="btn-mode-solo" class="segment" title="이어폰 / 1인용 타임라인 피드">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>
-          <span>이어폰 모드</span>
+          <span class="segment-label">이어폰<span class="label-long"> 모드</span></span>
         </button>
       </div>
 
@@ -100,6 +98,11 @@
     </div>
   </header>
 
+  <!-- 연결 상태 / 지연 표시 (모바일 포함 항상 보이도록 헤더 아래 배치) -->
+  <div class="status-strip" aria-live="polite">
+    <div id="connection-status-pill" class="status-chip">대기 중...</div>
+  </div>
+
   <!-- Main Container -->
   <main class="main-container">
     <!-- View 1: 대면 분할 뷰 (Face-to-Face Split Screen) -->
@@ -110,10 +113,10 @@
         <div class="zone-header">
           <div class="zone-tag">
             <span class="pulse-dot"></span>
-            <span>상대방 화면 (Guest View)</span>
+            <span>상대방 · Guest</span>
           </div>
           <div class="lang-selector-wrap">
-            <label for="partner-lang-select">대상 언어:</label>
+            <label for="partner-lang-select">상대 언어</label>
             <select id="partner-lang-select" class="lang-select">
             </select>
           </div>
@@ -136,7 +139,7 @@
           <button id="btn-ptt-partner" class="zone-ptt-button partner-ptt-btn" title="상대방: 누르고 있는 동안 말씀하세요">
             <div class="ptt-btn-inner">
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-              <span id="partner-ptt-btn-text">누르고 말하기 (Guest)</span>
+              <span id="partner-ptt-btn-text">Hold to talk</span>
             </div>
             <div class="ptt-pulse-ring"></div>
           </button>
@@ -157,7 +160,7 @@
               <span>🎙️ 자동 감지</span>
             </button>
             <button id="btn-mode-ptt" class="speech-mode-btn" title="버튼을 누르고 있는 동안 말하고 떼면 통역 (긴 문장/발표)">
-              <span>🔘 누르고 말하기 (PTT)</span>
+              <span>🔘 누르고 말하기</span>
             </button>
           </div>
           <button id="btn-toggle-stream" class="mic-button idle">
@@ -183,10 +186,10 @@
       <section class="user-zone">
         <div class="zone-header">
           <div class="zone-tag">
-            <span class="user-badge">나 (My View)</span>
+            <span class="user-badge">나</span>
           </div>
           <div class="lang-selector-wrap">
-            <label for="user-lang-select">내 언어:</label>
+            <label for="user-lang-select">내 언어</label>
             <select id="user-lang-select" class="lang-select">
             </select>
           </div>
@@ -227,12 +230,14 @@
             <button id="btn-solo-swap" class="icon-btn-compact">⇄</button>
             <select id="solo-target-lang" class="lang-select-compact"></select>
           </div>
-          <button id="btn-solo-clear" class="icon-btn-compact" title="대화창 비우고 새 대화 시작 (대화 히스토리에 자동 보관)" style="padding: 4px 10px; font-size: 0.75rem; border-radius: 8px; background: rgba(255,255,255,0.08); color: var(--text-secondary); border: 1px solid var(--border-color); cursor: pointer; display: flex; align-items: center; gap: 4px;">
-            <span>↺ 새 대화</span>
-          </button>
-          <div class="earphone-status">
-            <span class="earphone-icon">🎧</span>
-            <span>초저지연 오디오 스트리밍 준비 완료</span>
+          <div class="solo-sub-row">
+            <div class="earphone-status">
+              <span class="earphone-icon">🎧</span>
+              <span>이어폰을 끼면 번역 음성이 귀로만 들려요</span>
+            </div>
+            <button id="btn-solo-clear" class="solo-clear-btn" title="대화창 비우고 새 대화 시작 (대화 기록에 자동 보관)">
+              <span>↺ 새 대화</span>
+            </button>
           </div>
         </div>
 
@@ -241,7 +246,7 @@
           <div class="feed-placeholder">
             <div class="placeholder-icon">🎙️</div>
             <h3>실시간 동시통역 준비 완료</h3>
-            <p>마이크 버튼을 누르고 말씀하시면 귓속으로 번역된 음성이 전달되고 실시간 텍스트 피드가 생성됩니다.</p>
+            <p>아래 버튼을 누르고 말씀하시면 번역된 음성이 들리고, 대화가 여기에 자막으로 쌓입니다.</p>
           </div>
         </div>
 
@@ -259,7 +264,7 @@
   <!-- Sidebar: 대화 기록 (History Drawer) -->
   <aside id="history-drawer" class="drawer">
     <div class="drawer-header">
-      <h2>대화 히스토리 (Transcript Logs)</h2>
+      <h2>대화 기록</h2>
       <button id="btn-close-history" class="icon-btn">✕</button>
     </div>
     <div id="history-list" class="history-list">
@@ -268,7 +273,7 @@
     <div class="drawer-footer">
       <button id="btn-clear-history" class="secondary-btn" style="color: #f43f5e; border-color: rgba(244, 63, 94, 0.4);">기록 비우기</button>
       <button id="btn-copy-history" class="secondary-btn">전체 복사</button>
-      <button id="btn-download-history" class="primary-btn">텍스트 저장(.txt)</button>
+      <button id="btn-download-history" class="primary-btn">텍스트 저장</button>
     </div>
   </aside>
 
@@ -276,14 +281,14 @@
   <div id="settings-modal" class="modal-overlay hidden">
     <div class="modal-content">
       <div class="modal-header">
-        <h2>환경 설정 (Settings)</h2>
+        <h2>설정</h2>
         <button id="btn-close-settings" class="icon-btn">✕</button>
       </div>
       <div class="modal-body">
         <div class="setting-item">
           <div class="setting-label">
-            <strong>Echo Target Language</strong>
-            <p>입력 언어가 이미 대상 언어일 때 음성을 반복(에코)할지 여부</p>
+            <strong>같은 언어도 다시 읽어주기</strong>
+            <p>이미 번역할 언어로 말한 경우에도 음성을 한 번 더 들려줍니다</p>
           </div>
           <label class="switch">
             <input type="checkbox" id="setting-echo-toggle">
@@ -293,32 +298,32 @@
 
         <div class="setting-item">
           <div class="setting-label">
-            <strong>[자동 감지] 발화 멈춤 대기 시간</strong>
-            <p>말이 끝난 후 번역을 확정하고 넘어가기 위해 기다리는 시간 (짧을수록 반응 속도 극대화)</p>
+            <strong>말 끝 판단 시간 <span class="setting-scope">자동 감지</span></strong>
+            <p>이만큼 조용하면 말이 끝난 것으로 보고 대화를 나눕니다. 짧을수록 빠르게 넘어갑니다.</p>
           </div>
           <select id="setting-pause-tolerance" class="lang-select-compact" style="background: rgba(15, 23, 42, 0.8);">
-            <option value="500">⚡ 초고속 반응 (0.5초 - 빠른 반응)</option>
-            <option value="800" selected>🚀 빠름 (0.8초 - 추천 / 자연스러운 대화)</option>
-            <option value="1200">보통 (1.2초 - 일반 대화)</option>
-            <option value="2000">여유 있게 (2.0초 - 생각하며 말하기)</option>
+            <option value="500">⚡ 0.5초 · 매우 빠름</option>
+            <option value="800" selected>🚀 0.8초 · 추천</option>
+            <option value="1200">1.2초 · 보통</option>
+            <option value="2000">2.0초 · 여유 있게</option>
           </select>
         </div>
 
         <div class="setting-item">
           <div class="setting-label">
-            <strong>[자동 감지] 스마트 긴 문장 보호</strong>
-            <p>말하는 도중 번역 음성이 끼어들지 않고, 말이 끝난 후 깨끗하게 통역 음성을 재생합니다 (기본 켜짐 권장)</p>
+            <strong>말하는 동안 번역 음성 멈춤 <span class="setting-scope">자동 감지</span></strong>
+            <p>내 말과 번역 음성이 겹치지 않게 최대 3초까지 기다렸다 들려줍니다. 켜면 번역이 그만큼 늦게 들립니다. (기본 꺼짐)</p>
           </div>
           <label class="switch">
-            <input type="checkbox" id="setting-smart-guard" checked>
+            <input type="checkbox" id="setting-smart-guard">
             <span class="slider"></span>
           </label>
         </div>
 
         <div class="setting-item">
           <div class="setting-label">
-            <strong>음성 자동 출력 (Audio Playback)</strong>
-            <p>Gemini가 번역한 24kHz 음성을 스피커/이어폰으로 실시간 재생</p>
+            <strong>번역 음성 듣기</strong>
+            <p>번역된 음성을 스피커나 이어폰으로 바로 재생합니다</p>
           </div>
           <label class="switch">
             <input type="checkbox" id="setting-audio-out" checked>
@@ -329,14 +334,14 @@
         <div class="setting-item" style="flex-direction: column; align-items: flex-start; gap: 0.5rem; border-top: 1px solid var(--border-color); padding-top: 1rem;">
           <div class="setting-label">
             <strong style="color: #00e5ff; display: flex; align-items: center; gap: 6px;">
-              <span>🧠 AI 맞춤 학습 메모리 (Custom Dictionary)</span>
+              <span>🧠 나만의 용어집</span>
             </strong>
             <p>자주 틀리는 단어나 전문 용어, 사내 명칭을 등록하면 통역 AI가 즉시 기억하여 우선 번역합니다.</p>
           </div>
           <div style="display: flex; flex-direction: column; gap: 0.6rem; width: 100%;">
             <div style="display: flex; gap: 0.5rem; width: 100%;">
-              <input type="text" id="dict-source-word" placeholder="원문 단어/문구 (예: 번역톡)" style="flex: 1; min-width: 0; padding: 0.65rem 0.75rem; border-radius: 8px; background: rgba(0,0,0,0.45); color:#fff; border: 1px solid var(--border-color); font-size: 0.85rem;">
-              <input type="text" id="dict-target-word" placeholder="맞춤 번역어 (예: TalkTranslate)" style="flex: 1; min-width: 0; padding: 0.65rem 0.75rem; border-radius: 8px; background: rgba(0,0,0,0.45); color:#fff; border: 1px solid var(--border-color); font-size: 0.85rem;">
+              <input type="text" id="dict-source-word" placeholder="원문 (예: 라이브번역)" style="flex: 1; min-width: 0; padding: 0.65rem 0.75rem; border-radius: 8px; background: rgba(0,0,0,0.45); color:#fff; border: 1px solid var(--border-color); font-size: 0.85rem;">
+              <input type="text" id="dict-target-word" placeholder="번역어 (예: Live Translate)" style="flex: 1; min-width: 0; padding: 0.65rem 0.75rem; border-radius: 8px; background: rgba(0,0,0,0.45); color:#fff; border: 1px solid var(--border-color); font-size: 0.85rem;">
             </div>
             <button id="btn-add-dict-rule" class="primary-btn" style="width: 100%; padding: 0.75rem 1rem; border-radius: 8px; font-size: 0.9rem; font-weight: 600; background: linear-gradient(135deg, #00e5ff, #3b82f6); color: #050811; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; box-shadow: 0 4px 15px rgba(0, 229, 255, 0.35);">
               <span>➕ AI 맞춤 학습 추가 및 즉시 적용</span>
@@ -357,7 +362,7 @@
         <div class="auth-header-brand">
           <div class="auth-brand-logo">✨</div>
           <div>
-            <h2 id="auth-modal-title">Gemini 번역톡 로그인</h2>
+            <h2 id="auth-modal-title">Live Translate 로그인</h2>
             <p class="auth-subtitle">글로벌 실시간 양방향 AI 통역을 시작하세요</p>
           </div>
         </div>
@@ -477,7 +482,7 @@
                   <label class="custom-checkbox-wrap">
                     <input type="checkbox" id="agree-terms" class="agree-sub-item" required>
                     <span class="custom-check-box"></span>
-                    <span><strong class="req-tag">[필수]</strong> 번역톡 서비스 이용약관 동의</span>
+                    <span><strong class="req-tag">[필수]</strong> Live Translate 서비스 이용약관 동의</span>
                   </label>
                   <button type="button" class="btn-view-terms" data-type="service">전문보기</button>
                 </div>
@@ -608,6 +613,6 @@
   <script src="audio-streamer.js?v=2.0.0"></script>
   <script src="splash.js?v=2.0.0"></script>
   <script src="config.js?v=2.1.0"></script>
-  <script src="app.js?v=2.1.0"></script>
+  <script src="app.js?v=2.2.0"></script>
 </body>
 </html>

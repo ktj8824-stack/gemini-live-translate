@@ -1,5 +1,5 @@
 /**
- * 번역톡 (Gemini Live Translate) - Authentication & Cloud Sync Service
+ * Live Translate - Authentication & Cloud Sync Service
  * Firebase Auth & Cloud Firestore 연동 및 오프라인/로컬 동기화 하이브리드 엔진
  * (iOS WKWebView file:// 프로토콜 및 일반 웹 브라우저 100% 호환)
  */

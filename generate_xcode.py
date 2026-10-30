@@ -308,7 +308,7 @@ pbxproj_content = f"""// !$*UTF8*$!
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = LiveTranslate/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "번역톡";
+				INFOPLIST_KEY_CFBundleDisplayName = "Live Translate";
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -332,7 +332,7 @@ pbxproj_content = f"""// !$*UTF8*$!
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = LiveTranslate/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "번역톡";
+				INFOPLIST_KEY_CFBundleDisplayName = "Live Translate";
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
