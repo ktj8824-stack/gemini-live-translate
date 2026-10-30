@@ -6,8 +6,9 @@
  * - 24kHz smooth queue playback
  */
 class AudioStreamer {
-  constructor({ onAudioChunk, onInputVolume, onOutputVolume, onDebugLog }) {
+  constructor({ onAudioChunk, onInputVolume, onOutputVolume, onDebugLog, onMicLost }) {
     this.onAudioChunk = onAudioChunk;
+    this.onMicLost = onMicLost;
     this.onInputVolume = onInputVolume;
     this.onOutputVolume = onOutputVolume;
     this.onDebugLog = onDebugLog || console.log;
@@ -92,11 +93,37 @@ class AudioStreamer {
 
       const ctx = this.getAudioContext();
 
+      // iOS는 전화/알림/백그라운드 시 'suspended'뿐 아니라 'interrupted' 상태가 되므로 둘 다 복구
       ctx.onstatechange = () => {
-        if (this.audioContext && this.audioContext.state === 'suspended') {
-          this.audioContext.resume().catch(() => {});
+        const st = this.audioContext && this.audioContext.state;
+        if (st && st !== 'running' && st !== 'closed') {
+          this.onDebugLog(`[Audio] 오디오 엔진 상태: ${st} -> 재가동 시도`);
+          this.resumeContext();
         }
       };
+
+      // 마이크 장치가 끊기면(블루투스 해제, 다른 앱이 마이크 점유 등) 앱에 알려 재연결
+      stream.getAudioTracks().forEach((track) => {
+        track.onended = () => {
+          if (this.mediaStream === stream && this.isRecording) {
+            this.onDebugLog('[Mic] 마이크 트랙 종료 감지');
+            if (this.onMicLost) this.onMicLost('track_ended');
+          }
+        };
+      });
+      if (navigator.mediaDevices.addEventListener && !this._deviceChangeBound) {
+        this._deviceChangeBound = true;
+        navigator.mediaDevices.addEventListener('devicechange', () => {
+          if (!this.isRecording) return;
+          clearTimeout(this._deviceChangeTimer);
+          this._deviceChangeTimer = setTimeout(() => {
+            const track = this.mediaStream && this.mediaStream.getAudioTracks()[0];
+            if (!track || track.readyState === 'ended' || track.muted) {
+              if (this.onMicLost) this.onMicLost('device_change');
+            }
+          }, 500);
+        });
+      }
 
       if (ctx.state === 'suspended') {
         await ctx.resume();
@@ -176,6 +203,15 @@ class AudioStreamer {
       customErr.original = err;
       throw customErr;
     }
+  }
+
+  resumeContext() {
+    const ctx = this.audioContext;
+    if (!ctx || ctx.state === 'running' || ctx.state === 'closed') return;
+    ctx.resume().then(() => {
+      // 멈춰 있던 동안 밀린 재생 예약 시간을 현재로 당김 (재개 후 소리가 늦게 나오는 문제 방지)
+      if (this.nextPlayTime < ctx.currentTime) this.nextPlayTime = ctx.currentTime;
+    }).catch(() => {});
   }
 
   stopRecording() {
@@ -262,8 +298,8 @@ class AudioStreamer {
     try {
       const ctx = this.getAudioContext();
 
-      if (ctx.state === 'suspended') {
-        ctx.resume().catch(() => {});
+      if (ctx.state !== 'running') {
+        this.resumeContext();
       }
 
       const binary = atob(base64Data);
@@ -301,8 +337,11 @@ class AudioStreamer {
         this.nextPlayTime = currentTime;
       }
 
-      source.start(this.nextPlayTime);
+      const startAt = this.nextPlayTime;
+      source.start(startAt);
       this.nextPlayTime += audioBuffer.duration;
+      // 실제 소리가 나기 시작하는 시각(벽시계 ms) 반환 → 지연 측정용
+      const startWallMs = Date.now() + Math.max(0, startAt - currentTime) * 1000;
 
       if (this.onOutputVolume) {
         let sum = 0;
@@ -312,8 +351,10 @@ class AudioStreamer {
         const rms = Math.sqrt(sum / float32Array.length);
         this.onOutputVolume(rms);
       }
+      return startWallMs;
     } catch (err) {
       console.error('[AudioStreamer] Error playing chunk:', err);
+      return null;
     }
   }
 
