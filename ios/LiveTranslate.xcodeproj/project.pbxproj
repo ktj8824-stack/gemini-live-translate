@@ -265,7 +265,7 @@
 				DEVELOPMENT_TEAM = WKR837G6CH;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = LiveTranslate/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "번역톡";
+				INFOPLIST_KEY_CFBundleDisplayName = "Live Translate";
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -290,7 +290,7 @@
 				DEVELOPMENT_TEAM = WKR837G6CH;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = LiveTranslate/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "번역톡";
+				INFOPLIST_KEY_CFBundleDisplayName = "Live Translate";
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

@@ -5,7 +5,6 @@ async function startTunnel() {
     const tunnel = await localtunnel({ port: 3000, subdomain: 'gemini-live-translate-app' });
     console.log('--------------------------------------------------');
     console.log('🚀 Mobile Tunnel URL:', tunnel.url);
-    console.log('🔑 Tunnel Password (IP): 125.191.86.189');
     console.log('--------------------------------------------------');
 
     tunnel.on('close', () => {

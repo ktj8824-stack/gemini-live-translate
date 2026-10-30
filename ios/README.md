@@ -1,6 +1,6 @@
 # LiveTranslate iOS (Xcode Project)
 
-번역톡 실시간 동시통역 앱의 공식 **Xcode (iOS) 프로젝트**입니다.
+Live Translate 실시간 동시통역 앱의 공식 **Xcode (iOS) 프로젝트**입니다.
 WKWebView 기반으로 패키징되어 있으며, 아이폰 하드웨어 마이크와 24kHz 오디오 출력을 네이티브 수준으로 지원합니다.
 
 ---
@@ -30,7 +30,7 @@ ios/LiveTranslate.xcodeproj
 1. 아이폰을 Mac에 USB 케이블로 연결합니다.
 2. Xcode 상단 기기 선택 바에서 **`My Mac` 대신 연결한 본인의 `iPhone`**을 선택합니다.
 3. 좌측 상단의 **▶ (Run)** 버튼을 클릭하거나 `Cmd + R`을 누릅니다.
-4. 빌드가 완료되면 아이폰에 **번역톡** 앱이 자동으로 설치되고 실행됩니다!
+4. 빌드가 완료되면 아이폰에 **Live Translate** 앱이 자동으로 설치되고 실행됩니다!
 
 ---
 
@@ -45,3 +45,10 @@ ios/LiveTranslate.xcodeproj
 - **AVAudioSession PlayAndRecord**: 마이크 입력과 스피커/블루투스 출력이 하울링/에코 없이 동시 작동
 - **로컬 번들 오프라인 패키징**: `www/` 폴더 내에 HTML/CSS/JS가 모두 포함되어 빠르고 가볍게 구동
 - **Safari 웹 검사기 지원**: Mac Safari의 개발자용 메뉴에서 아이폰 웹뷰를 실시간 디버깅 가능
+
+---
+
+### 🔐 서버 주소 설정 (필수)
+보안을 위해 Gemini API 키는 앱에 들어 있지 않습니다. 앱은 Live Translate 서버에서 **1회용 임시 토큰**을 받아 통역합니다.
+1. 서버(`server.js`)를 배포하고 `.env`에 `GEMINI_API_KEY`를 설정합니다. (`.env.example` 참고)
+2. `ios/LiveTranslate/www/config.js`의 `TALK_API_BASE`를 배포한 서버 주소로 바꿉니다.

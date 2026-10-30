@@ -1,5 +1,5 @@
 /**
- * Gemini Live Translate Frontend Application
+ * Live Translate Frontend Application
  * Handles both Text, Blob & ArrayBuffer WebSocket data safely
  */
 
@@ -39,13 +39,201 @@ const SUPPORTED_LANGUAGES = [
   { code: 'sk', name: '슬로바키아어 (Slovak)', flag: '🇸🇰' }
 ];
 
-// Fixed Default Gemini API Key (Decoded at runtime to protect from git secret scanning)
-const FIXED_GEMINI_API_KEY = atob('QVEuQWI4Uk42THhqQ2dvYVZaVXpjcHo3M211SUxwMlA1dFM2TTY5STdid01LU3ZQZFZqVXc=');
+// =========================================================================
+// 서버 주소 설정
+// - 웹(서버에서 직접 서빙): 같은 서버(상대 경로)를 사용
+// - iOS 앱(file://): window.TALK_API_BASE 에 배포된 서버 주소를 넣어야 함 (config.js)
+// Gemini API 키는 서버에만 있고, 앱은 서버에서 1회용 임시 토큰만 받아 사용합니다.
+// =========================================================================
+const API_BASE = (window.TALK_API_BASE || '').replace(/\/$/, '');
+const LIVE_MODEL = 'models/gemini-3.5-live-translate-preview';
+const GEMINI_LIVE_WS = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained';
+
+async function fetchLiveToken() {
+  const res = await fetch(`${API_BASE}/api/live-token`, { method: 'POST' });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.token) {
+    const err = new Error(data.error || `통역 서버 연결 실패 (${res.status})`);
+    err.status = res.status;
+    throw err;
+  }
+  return data.token;
+}
+
+// 오디오/세션 튜닝 값
+const VOICE_THRESHOLD = 0.02;            // 말하는 중으로 판단하는 최소 음량
+const VOICE_THRESHOLD_DURING_PLAYBACK = 0.06; // 번역 음성 재생 중엔 스피커 소리 오인 방지를 위해 더 높게
+const SMART_GUARD_MAX_HOLD_MS = 3000;    // 스마트 보호 사용 시에도 번역 음성을 최대 3초까지만 보류
+const SESSION_READY_TIMEOUT_MS = 8000;   // 연결 후 이 시간 안에 준비 완료가 안 되면 재연결
+const MAX_RECONNECT_ATTEMPTS = 5;
+const PRE_READY_BUFFER_CHUNKS = 40;      // 준비 전 음성 최대 약 2.4초 보관 후 전송 (첫 마디 유실 방지)
+
+function buildLiveSetupMessage(targetLang, echoTargetLanguage) {
+  // 공식 문서 형식: AUDIO 출력 + 입력/출력 자막(transcription) 활성화
+  // ※ Live API는 setup을 연결 직후 1회만 받습니다. 언어를 바꾸려면 새 세션이 필요합니다.
+  return {
+    setup: {
+      model: LIVE_MODEL,
+      generationConfig: {
+        responseModalities: ['AUDIO'],
+        inputAudioTranscription: {},
+        outputAudioTranscription: {},
+        translationConfig: {
+          targetLanguageCode: targetLang,
+          echoTargetLanguage: Boolean(echoTargetLanguage)
+        }
+      }
+    }
+  };
+}
+
+/**
+ * Live Translate 통역 세션 1개 (= 번역 방향 1개)
+ * - 서버 준비 완료(setupComplete) 전에는 음성을 보내지 않고 잠시 보관했다가 한 번에 전송
+ * - 준비 시간 초과/끊김은 onClose로 알려 앱이 재연결하도록 함
+ */
+class LiveSession {
+  constructor({ targetLang, echo, onReady, onMessage, onClose, log }) {
+    this.targetLang = targetLang;
+    this.echo = echo;
+    this.onReady = onReady;
+    this.onMessage = onMessage;
+    this.onClose = onClose;
+    this.log = log || console.log;
+    this.ws = null;
+    this.ready = false;
+    this.closedByUser = false;
+    this.pending = [];
+    this.endAfterFlush = false;
+    this.readyTimer = null;
+    this.replaces = null; // GoAway 교체용: 이 세션이 준비되면 대체할 이전 세션
+  }
+
+  async connect() {
+    const token = await fetchLiveToken();
+    if (this.closedByUser) return;
+
+    const ws = new WebSocket(`${GEMINI_LIVE_WS}?access_token=${encodeURIComponent(token)}`);
+    this.ws = ws;
+
+    this.readyTimer = setTimeout(() => {
+      if (!this.ready && !this.closedByUser) {
+        this.log(`[Session ${this.targetLang}] 준비 시간 초과 -> 재연결`);
+        try { ws.close(4000, 'setup timeout'); } catch (e) {}
+      }
+    }, SESSION_READY_TIMEOUT_MS);
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify(buildLiveSetupMessage(this.targetLang, this.echo)));
+      this.log(`[Session ${this.targetLang}] 연결됨, 설정 전송`);
+    };
+
+    ws.onmessage = async (event) => {
+      let raw;
+      try {
+        let text = '';
+        if (typeof event.data === 'string') text = event.data;
+        else if (event.data instanceof Blob) text = await event.data.text();
+        else if (event.data instanceof ArrayBuffer) text = new TextDecoder().decode(event.data);
+        raw = JSON.parse(text);
+      } catch (e) {
+        this.log(`[Session ${this.targetLang}] 메시지 해석 오류: ${e.message}`);
+        return;
+      }
+
+      if (raw.setupComplete || raw.setup_complete) {
+        this.ready = true;
+        clearTimeout(this.readyTimer);
+        this.flushPending();
+        if (this.onReady) this.onReady(this);
+        return;
+      }
+      if (this.onMessage) this.onMessage(raw, this);
+    };
+
+    ws.onerror = () => {
+      this.log(`[Session ${this.targetLang}] 연결 오류`);
+    };
+
+    ws.onclose = (ev) => {
+      clearTimeout(this.readyTimer);
+      this.ready = false;
+      if (this.ws !== ws) return;
+      if (this.onClose) this.onClose(this, ev);
+    };
+  }
+
+  get isOpen() {
+    return this.ws && this.ws.readyState === WebSocket.OPEN;
+  }
+
+  sendRaw(obj) {
+    if (this.ready && this.isOpen) {
+      this.ws.send(JSON.stringify(obj));
+      return true;
+    }
+    return false;
+  }
+
+  sendAudio(base64) {
+    this.endAfterFlush = false;
+    const payload = { realtimeInput: { audio: { mimeType: 'audio/pcm;rate=16000', data: base64 } } };
+    if (this.sendRaw(payload)) return true;
+    if (!this.closedByUser) {
+      this.pending.push(payload);
+      if (this.pending.length > PRE_READY_BUFFER_CHUNKS) this.pending.shift();
+    }
+    return false;
+  }
+
+  // 마이크 입력이 끝났음을 명확히 알림 → 서버가 기다리지 않고 바로 번역 마무리
+  endAudioStream() {
+    if (!this.ready) {
+      // 아직 준비 전이면 보관 중인 음성을 먼저 보낸 뒤 '입력 끝' 신호를 보냄
+      this.endAfterFlush = true;
+      return false;
+    }
+    return this.sendRaw({ realtimeInput: { audioStreamEnd: true } });
+  }
+
+  clearPending() {
+    this.pending = [];
+  }
+
+  flushPending() {
+    const queued = this.pending;
+    this.pending = [];
+    queued.forEach(p => this.sendRaw(p));
+    if (queued.length) this.log(`[Session ${this.targetLang}] 준비 전 음성 ${queued.length}조각 전송`);
+    if (this.endAfterFlush) {
+      this.endAfterFlush = false;
+      this.sendRaw({ realtimeInput: { audioStreamEnd: true } });
+    }
+  }
+
+  close() {
+    this.closedByUser = true;
+    this.ready = false;
+    this.pending = [];
+    clearTimeout(this.readyTimer);
+    if (this.ws) {
+      try { this.ws.close(1000, 'client close'); } catch (e) {}
+    }
+  }
+}
 
 class LiveTranslatorApp {
   constructor() {
-    this.ws = null;
+    this.sessions = new Map();          // 번역 대상 언어 -> LiveSession
+    this.reconnectAttempts = new Map(); // 번역 대상 언어 -> 재시도 횟수
+    this.reconnectTimers = new Map();
     this.isStreaming = false;
+
+    // 지연 측정 (말이 끝난 시점 -> 번역 음성 재생 시작)
+    this.latencyStartAt = null;
+    this.latencySamples = [];
+    this.silenceStartAt = null;
+    this.audioHoldStartedAt = null;
     this.currentMode = 'split';
     
     this.userLang = 'ko';
@@ -54,7 +242,6 @@ class LiveTranslatorApp {
     this.chunksSent = 0;
     this.chunksReceived = 0;
 
-    this.apiKey = FIXED_GEMINI_API_KEY;
     this.settings = {
       echoTargetLanguage: false,
       audioOutputEnabled: true,
@@ -67,7 +254,9 @@ class LiveTranslatorApp {
     // [자동 감지 (Handsfree) 전용 설정 및 상태]
     const savedPause = localStorage.getItem('gemini_pause_tolerance');
     this.pauseTolerance = savedPause ? (parseInt(savedPause, 10) || 800) : 800;
-    this.smartGuard = localStorage.getItem('gemini_smart_guard') !== 'false'; // 기본 true (문장 끝난 후 깨끗하게 통역 음성 출력)
+    // 기본 OFF: 번역 음성을 오는 즉시 재생 (동시통역). 사용자가 직접 켠 경우에만 문장 끝까지 보류
+    this.smartGuard = localStorage.getItem('gemini_smart_guard') === 'true'
+      && localStorage.getItem('gemini_smart_guard_user_set') === 'true';
     this.handsfreeSilenceTimer = null;
     this.isHandsfreeSpeaking = false;
 
@@ -99,6 +288,7 @@ class LiveTranslatorApp {
         this.handleVoiceVolume(vol);
       },
       onOutputVolume: (vol) => this.drawWaveform('partner-wave', vol, '#8b5cf6'),
+      onMicLost: (why) => this.recoverMicrophone(why),
       onDebugLog: (msg) => this.addDebugLog(msg)
     });
 
@@ -113,7 +303,7 @@ class LiveTranslatorApp {
     this.updateAiLearnBadge('idle');
     this.updateSpeechModeUI();
     this.bindEvents();
-    this.checkApiKey();
+    this.setStatusPill('준비 완료 (마이크 터치)', '#10b981');
     this.initAuthService();
   }
 
@@ -181,10 +371,6 @@ class LiveTranslatorApp {
     this.btnAddDictRule = document.getElementById('btn-add-dict-rule');
     this.dictRulesList = document.getElementById('dict-rules-list');
 
-    this.inputApiKey = document.getElementById('input-api-key');
-    if (this.inputApiKey) {
-      this.inputApiKey.value = this.apiKey;
-    }
 
     this.settingEchoToggle = document.getElementById('setting-echo-toggle');
     if (this.settingEchoToggle) {
@@ -396,15 +582,8 @@ class LiveTranslatorApp {
       this.settingsModal.classList.remove('hidden');
     });
 
-    if (this.inputApiKey) {
-      this.inputApiKey.addEventListener('input', (e) => {
-        this.apiKey = e.target.value.trim();
-        localStorage.setItem('gemini_api_key', this.apiKey);
-        if (this.apiKey) {
-          this.setStatusPill('준비 완료 (마이크 터치)', '#10b981');
-        }
-      });
-    }
+    // 예전 버전에서 기기에 저장된 API 키 흔적 제거
+    try { localStorage.removeItem('gemini_api_key'); } catch (e) {}
 
     // Pause Tolerance & Smart Guard listeners
     this.settingPauseTolerance?.addEventListener('change', (e) => {
@@ -450,14 +629,23 @@ class LiveTranslatorApp {
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') {
         this.saveCurrentSessionToHistory('app_background');
+      } else if (this.isStreaming) {
+        // 앱으로 돌아왔을 때: 오디오 엔진 재가동 + 끊긴 세션 재연결
+        this.audioStreamer.resumeContext();
+        if (!this.audioStreamer.isRecording) this.recoverMicrophone('app_resume');
+        this.ensureSessions();
       }
     });
 
     // 1. 시작 스플래시 인트로 종료 시 -> 미로그인 사용자에게 로그인 모달 자동 표시
+    // 시작 화면이 끝나면 로그인 없이 바로 사용 (로그인은 우측 상단 버튼에서 언제든 가능)
     window.addEventListener('app:splashFinished', () => {
-      if (!this.authService || !this.authService.currentUser) {
-        this.toggleAuthModal(true);
-      }
+      try {
+        if (!localStorage.getItem('lt_login_hint_shown') && (!this.authService || !this.authService.currentUser)) {
+          localStorage.setItem('lt_login_hint_shown', '1');
+          setTimeout(() => this.showToast('로그인하면 대화 기록이 동기화돼요'), 600);
+        }
+      } catch (e) {}
     });
 
     // 2. Auth & Cloud Sync Modal Events
@@ -824,12 +1012,12 @@ class LiveTranslatorApp {
     if (!this.termsModal || !this.termsModalTitle || !this.termsModalBodyText) return;
 
     if (type === 'service') {
-      this.termsModalTitle.textContent = '번역톡 서비스 이용약관 (전문)';
+      this.termsModalTitle.textContent = 'Live Translate 서비스 이용약관 (전문)';
       this.termsModalBodyText.textContent = `[제1조 (목적)]
-본 약관은 번역톡(Gemini Live Translate) 서비스의 이용조건 및 절차, 이용자와 회사의 권리, 의무, 책임사항을 규정함을 목적으로 합니다.
+본 약관은 Live Translate 서비스의 이용조건 및 절차, 이용자와 회사의 권리, 의무, 책임사항을 규정함을 목적으로 합니다.
 
 [제2조 (서비스의 내용)]
-1. 번역톡은 최신 인공지능(Google Gemini Live API)을 활용한 실시간 양방향 음성 동시통역 및 자막 피드, AI 맞춤 사전 학습 기능을 제공합니다.
+1. Live Translate는 최신 인공지능(Google Gemini Live API)을 활용한 실시간 양방향 음성 동시통역 및 자막 피드, AI 맞춤 사전 학습 기능을 제공합니다.
 2. 회원은 개인용 이어폰 모드 또는 테이블 대면 분할 모드를 통해 다국어 통역 서비스를 이용할 수 있습니다.
 
 [제3조 (이용계약 체결 및 계정 관리)]
@@ -1087,7 +1275,7 @@ AI 실시간 번역의 특성상 주변 소음, 발화 억양, 네트워크 환�
     // 3. 버튼 active 시각 효과 및 라벨 복원
     this.btnPttPartner?.classList.remove('ptt-active');
     this.btnPttUser?.classList.remove('ptt-active');
-    if (this.partnerPttBtnText) this.partnerPttBtnText.textContent = '누르고 말하기 (Guest)';
+    if (this.partnerPttBtnText) this.partnerPttBtnText.textContent = 'Hold to talk';
     if (this.userPttBtnText) this.userPttBtnText.textContent = '누르고 말하기 (나)';
     this.btnToggleStream?.classList.remove('ptt-active');
     this.btnSoloMic?.classList.remove('ptt-active');
@@ -1151,27 +1339,15 @@ AI 실시간 번역의 특성상 주변 소음, 발화 억양, 네트워크 환�
     }
   }
 
-  sendSilenceBurst(count = 4) {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    // 16000Hz 16-bit Mono PCM 60ms = 960 samples = 1920 zero bytes = 2560 'A's in base64
-    const silenceBase64 = 'A'.repeat(2560);
-    for (let i = 0; i < count; i++) {
-      setTimeout(() => {
-        if (this.ws && this.ws.readyState === WebSocket.OPEN && !this.isPttHolding) {
-          const payload = {
-            realtime_input: {
-              media_chunks: [
-                {
-                  mime_type: 'audio/pcm;rate=16000',
-                  data: silenceBase64
-                }
-              ]
-            }
-          };
-          this.ws.send(JSON.stringify(payload));
-          this.addDebugLog(`[VAD] 무음 종결 신호 전송 (${i + 1}/${count})`);
-        }
-      }, i * 35);
+  // 누르고 말하기 종료: 짧은 무음 + '입력 끝' 신호로 서버가 즉시 번역을 마무리하게 함
+  sendEndOfSpeech(session) {
+    if (!session) return;
+    const silenceBase64 = 'A'.repeat(2560); // 60ms 무음 (16kHz 16bit mono)
+    for (let i = 0; i < 3; i++) {
+      session.sendAudio(silenceBase64);
+    }
+    if (session.endAudioStream()) {
+      this.addDebugLog(`[PTT] 입력 끝 신호 전송 (${session.targetLang})`);
     }
   }
 
@@ -1212,43 +1388,14 @@ AI 실시간 번역의 특성상 주변 소음, 발화 억양, 네트워크 환�
       this.setStatusPill('내 음성 입력 중...', '#00e5ff');
     }
 
+    this.latencyStartAt = null;
+
     if (!this.isStreaming) {
       await this.startStreaming();
     } else {
-      // 이미 연결된 실시간 세션에서 발화자(상대방 vs 나)에 따라 통역 타겟 언어 즉시 전환
-      const activeTarget = speaker === 'partner' ? this.userLang : this.partnerLang;
-      if (this.lastSentTargetLang !== activeTarget) {
-        this.sendSetupMessage(activeTarget);
-      }
+      // 발화자별 번역 방향 세션은 미리 열려 있음 → 끊김 없이 전환. 없으면(재연결 중 등) 즉시 연결
+      this.ensureSessions();
     }
-  }
-
-  sendSetupMessage(targetLang = null) {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    const tgt = targetLang || ((this.speechMode === 'ptt' && this.currentPttSpeaker === 'partner') ? this.userLang : this.partnerLang);
-    this.lastSentTargetLang = tgt;
-
-    let customGlossary = '';
-    if (this.learnedRules && this.learnedRules.length > 0) {
-      const topRules = this.learnedRules.slice(0, 8);
-      customGlossary = `\nCustom Glossary & Key Terms:\n` + topRules.map(r => `- "${r.src}" -> "${r.tgt}"`).join('\n');
-    }
-
-    const setupMessage = {
-      setup: {
-        model: 'models/gemini-3.5-live-translate-preview',
-        generation_config: {
-          response_modalities: ['AUDIO', 'TEXT'],
-          translation_config: {
-            target_language_code: tgt,
-            echo_target_language: this.settings.echoTargetLanguage
-          }
-        }
-      }
-    };
-
-    this.ws.send(JSON.stringify(setupMessage));
-    this.addDebugLog(`[Setup Sent] Target: ${tgt} (Speaker: ${this.currentPttSpeaker})`);
   }
 
   handlePttUp(e) {
@@ -1263,15 +1410,17 @@ AI 실시간 번역의 특성상 주변 소음, 발화 억양, 네트워크 환�
     // 1. 버튼 눌림 시각 효과 해제 및 라벨 복원
     this.btnPttPartner?.classList.remove('ptt-active');
     this.btnPttUser?.classList.remove('ptt-active');
-    if (this.partnerPttBtnText) this.partnerPttBtnText.textContent = '누르고 말하기 (Guest)';
+    if (this.partnerPttBtnText) this.partnerPttBtnText.textContent = 'Hold to talk';
     if (this.userPttBtnText) this.userPttBtnText.textContent = '누르고 말하기 (나)';
 
     this.btnToggleStream?.classList.remove('ptt-active');
     this.btnSoloMic?.classList.remove('ptt-active');
     this.setStatusPill('번역 출력 중...', '#00e5ff');
 
-    // 2. Gemini Live 신경망에 "문장이 끝났다"는 명확한 침묵 신호(Zero PCM Silence Burst)를 전송
-    this.sendSilenceBurst(5);
+    // 2. 서버에 '입력 끝' 신호 전송 → 번역 즉시 마무리
+    const releasedSession = this.activeSession;
+    this.markSpeechEnd(Date.now());
+    this.sendEndOfSpeech(releasedSession);
 
     // 3. 누르고 있는 동안 도착해서 보류되었던 번역 오디오가 있다면 즉시 재생
     this.playPendingAudioQueue();
@@ -1321,15 +1470,20 @@ AI 실시간 번역의 특성상 주변 소음, 발화 억양, 네트워크 환�
   handleVoiceVolume(vol) {
     if (this.speechMode !== 'handsfree') return;
 
-    if (vol > 0.008) {
+    // 번역 음성이 스피커로 나오는 중에는 그 소리를 내 목소리로 오인하지 않도록 기준을 높임
+    const threshold = this.audioStreamer.isPlaybackActive() ? VOICE_THRESHOLD_DURING_PLAYBACK : VOICE_THRESHOLD;
+
+    if (vol > threshold) {
       this.isHandsfreeSpeaking = true;
       this.lastSpeechTime = Date.now();
+      this.silenceStartAt = null;
       if (this.handsfreeSilenceTimer) {
         clearTimeout(this.handsfreeSilenceTimer);
         this.handsfreeSilenceTimer = null;
       }
     } else if (this.isHandsfreeSpeaking) {
       // 말이 잦아들었을 때 설정창에서 지정한 발화 멈춤 대기 시간(pauseTolerance) 동안 침묵인지 관찰
+      if (!this.silenceStartAt) this.silenceStartAt = Date.now();
       if (!this.handsfreeSilenceTimer) {
         this.handsfreeSilenceTimer = setTimeout(() => {
           this.onHandsfreeSpeechEnded();
@@ -1341,6 +1495,8 @@ AI 실시간 번역의 특성상 주변 소음, 발화 억양, 네트워크 환�
   onHandsfreeSpeechEnded() {
     this.isHandsfreeSpeaking = false;
     this.handsfreeSilenceTimer = null;
+    this.markSpeechEnd(this.silenceStartAt || Date.now());
+    this.silenceStartAt = null;
     this.addDebugLog(`[자동감지] 발화 멈춤 감지 (${this.pauseTolerance}ms 경과) -> 통역 음성 재생`);
 
     // 스마트 긴 문장 보호로 보류되었던 번역 음성 일괄 재생
@@ -1372,12 +1528,54 @@ AI 실시간 번역의 특성상 주변 소음, 발화 억양, 네트워크 환�
   }
 
   playPendingAudioQueue() {
+    this.audioHoldStartedAt = null;
     if (!this.settings.audioOutputEnabled || this.pendingAudioQueue.length === 0) return;
     this.addDebugLog(`[오디오 재생] 보류된 청크 ${this.pendingAudioQueue.length}개 재생`);
     while (this.pendingAudioQueue.length > 0) {
       const chunk = this.pendingAudioQueue.shift();
-      this.audioStreamer.playChunk(chunk);
+      this.playTranslatedChunk(chunk);
     }
+  }
+
+  // 번역 음성 재생 + 지연 측정
+  playTranslatedChunk(chunk) {
+    const startWallMs = this.audioStreamer.playChunk(chunk);
+    if (this.latencyStartAt && startWallMs) {
+      const latency = startWallMs - this.latencyStartAt;
+      this.latencyStartAt = null;
+      if (latency >= 0 && latency < 20000) this.recordLatency(latency);
+    }
+  }
+
+  // 말이 끝난 시점 기록. 이미 번역 음성이 나오는 중이면(동시통역) 측정하지 않음
+  markSpeechEnd(timeMs) {
+    if (this.audioStreamer.isPlaybackActive()) {
+      this.latencyStartAt = null;
+      return;
+    }
+    this.latencyStartAt = timeMs;
+  }
+
+  recordLatency(ms) {
+    this.latencySamples.push(ms);
+    if (this.latencySamples.length > 10) this.latencySamples.shift();
+    const avg = this.latencySamples.reduce((a, b) => a + b, 0) / this.latencySamples.length;
+    this.addDebugLog(`[지연] 말 끝 -> 번역 음성 ${(ms / 1000).toFixed(2)}초 (최근 ${this.latencySamples.length}회 평균 ${(avg / 1000).toFixed(2)}초)`);
+    this.renderLatencyBadge(ms, avg);
+  }
+
+  renderLatencyBadge(lastMs, avgMs) {
+    if (!this.latencyBadge && this.statusPill) {
+      this.latencyBadge = document.createElement('div');
+      this.latencyBadge.id = 'latency-badge';
+      this.latencyBadge.className = 'status-chip';
+      this.latencyBadge.title = '말이 끝난 뒤 번역 음성이 나오기까지 걸린 시간 (최근 10회 평균)';
+      this.statusPill.insertAdjacentElement('afterend', this.latencyBadge);
+    }
+    if (!this.latencyBadge) return;
+    const color = avgMs < 1500 ? '#10b981' : avgMs < 3000 ? '#f59e0b' : '#f43f5e';
+    this.latencyBadge.style.color = color;
+    this.latencyBadge.textContent = `⏱ 지연 ${(lastMs / 1000).toFixed(1)}초 · 평균 ${(avgMs / 1000).toFixed(1)}초`;
   }
 
   addDictionaryRule(sourceVal = null, targetVal = null) {
@@ -1470,43 +1668,19 @@ AI 실시간 번역의 특성상 주변 소음, 발화 억양, 네트워크 환�
       this.addDebugLog('[Auto AI] Background learning analyzing conversation...');
       const recentTurns = this.history.slice(-10);
 
-      const prompt = `You are an Autonomous AI Linguist & Memory Engine.
-Analyze the following bilingual conversation transcript between two users:
-${JSON.stringify(recentTurns, null, 2)}
-
-Already known memory rules:
-${JSON.stringify(this.learnedRules || [])}
-
-Tasks:
-1. Identify any key proper nouns, brand names, technical/specialized terms, jargon, slang, or recurring phrases that need consistent, accurate future translation.
-2. Summarize the ongoing context / domain of the conversation in 1 concise sentence (e.g. "Real estate contract negotiation with a US client").
-3. Output ONLY a valid JSON object matching this schema:
-{
-  "contextSummary": "1 sentence domain/context summary",
-  "extractedRules": [
-    { "src": "original phrase/term", "tgt": "ideal translation", "reason": "why this should be remembered" }
-  ]
-}
-Do not include markdown code block quotes. Output pure JSON only.`;
-
-      const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${this.apiKey}`, {
+      const geminiRes = await fetch(`${API_BASE}/api/learn-auto`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { responseMimeType: 'application/json' }
-        })
+        body: JSON.stringify({ history: recentTurns, currentRules: this.learnedRules || [] })
       });
 
       if (!geminiRes.ok) {
         this.updateAiLearnBadge('idle');
         return;
       }
-      const rawData = await geminiRes.json();
-      const rawText = rawData?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
       let data = {};
       try {
-        data = JSON.parse(rawText);
+        data = await geminiRes.json();
       } catch (e) {
         data = {};
       }
@@ -1561,17 +1735,6 @@ Do not include markdown code block quotes. Output pure JSON only.`;
     }, 3500);
   }
 
-  checkApiKey() {
-    if (!this.apiKey) {
-      setTimeout(() => {
-        this.settingsModal.classList.remove('hidden');
-        this.setStatusPill('API 키 입력 필요', '#f59e0b');
-      }, 400);
-    } else {
-      this.setStatusPill('준비 완료 (마이크 터치)', '#10b981');
-    }
-  }
-
   setMode(mode) {
     this.currentMode = mode;
     if (mode === 'split') {
@@ -1620,8 +1783,6 @@ Do not include markdown code block quotes. Output pure JSON only.`;
 
   async startStreaming() {
     try {
-      this.apiKey = this.apiKey || FIXED_GEMINI_API_KEY;
-
       this.chunksSent = 0;
       this.chunksReceived = 0;
       this.updateStatusUI(true);
@@ -1645,99 +1806,10 @@ Do not include markdown code block quotes. Output pure JSON only.`;
         return;
       }
 
-      // 2. Connect to Gemini Live Translate WebSocket
-      this.setStatusPill('Gemini 통역 서버 연결 중...', 'orange');
-      this.streamStatusLabel.textContent = '마이크 정상 감지 중 🎙️ | Gemini 연결 중...';
-      this.addDebugLog(`[Gemini] Connecting directly to Live Translate (${this.partnerLang})...`);
-
-      const geminiUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${this.apiKey}`;
-      this.ws = new WebSocket(geminiUrl);
-
-      this.ws.onopen = async () => {
-        this.addDebugLog('[WebSocket] Connected directly to Gemini! Sending setup...');
-        this.setStatusPill('세션 구성 중...', 'cyan');
-
-        const srcLangObj = SUPPORTED_LANGUAGES.find(l => l.code === this.userLang);
-        const tgtLangObj = SUPPORTED_LANGUAGES.find(l => l.code === this.partnerLang);
-        const srcName = srcLangObj ? srcLangObj.name : this.userLang;
-        const tgtName = tgtLangObj ? tgtLangObj.name : this.partnerLang;
-
-        let customGlossary = '';
-        if (this.learnedRules && this.learnedRules.length > 0) {
-          const topRules = this.learnedRules.slice(0, 8);
-          customGlossary = `\nCustom Glossary & Key Terms:\n` + topRules.map(r => `- "${r.src}" -> "${r.tgt}"`).join('\n');
-        }
-
-        this.sendSetupMessage();
-        this.setStatusPill('통역 중 (듣는 중)', '#10b981');
-        this.streamStatusLabel.textContent = this.speechMode === 'ptt'
-          ? '버튼을 누르고 있는 동안 말씀하세요 (Space 키 가능)'
-          : '음성을 듣고 실시간 통역 중입니다... (말씀하세요)';
-      };
-
-      this.ws.onmessage = async (event) => {
-        try {
-          let text = '';
-          if (typeof event.data === 'string') {
-            text = event.data;
-          } else if (event.data instanceof Blob) {
-            text = await event.data.text();
-          } else if (event.data instanceof ArrayBuffer) {
-            text = new TextDecoder().decode(event.data);
-          }
-          const raw = JSON.parse(text);
-          this.handleServerMessage(raw);
-        } catch (e) {
-          console.error('Parse error:', e, event.data);
-          this.addDebugLog(`[Message Parse Error] ${e.message}`);
-        }
-      };
-
-      this.ws.onclose = (ev) => {
-        const reason = ev.reason || '';
-        this.addDebugLog(`[WebSocket Closed] Code: ${ev.code}, Reason: ${reason || 'None'}`);
-        
-        // 1. Google 10분 세션 최대 지속시간 만료 (GoAway 정상 세션 회전 - 오류 아님!)
-        const isSessionLimit = reason.includes('GoAway') || reason.includes('session duration') || reason.includes('duration limit');
-        if (isSessionLimit) {
-          this.addDebugLog('[Gemini] Google 10분 세션 지속 제한에 도달하여 자동 갱신되었습니다. (정상 동작)');
-          this.stopStreaming();
-          this.setStatusPill('세션 갱신 완료 (준비)', '#10b981');
-          if (this.speechMode === 'handsfree') {
-            // 자동 감지(핸즈프리) 모드인 경우 사용자가 끊김을 느끼지 않게 바로 새 세션 재연결
-            setTimeout(() => this.startStreaming(), 300);
-          } else {
-            this.updatePttIdleUI();
-          }
-          return;
-        }
-
-        let alertMessage = null;
-        if (ev.code === 1011 || reason.includes('prepayment credits are depleted') || reason.includes('credits')) {
-          this.setStatusPill('API 크레딧 소진', '#f43f5e');
-          alertMessage = '⚠️ 구글 Gemini API 키의 크레딧/한도가 소진되었습니다.\n\n새로운 Gemini API 키를 발급받으신 후 상단 설정(⚙️) 아이콘을 눌러 새 키를 입력해 주세요.';
-        } else if ((ev.code === 1006 || ev.code === 1007 || ev.code === 1008) && !reason.includes('normal')) {
-          this.setStatusPill('API 인증 실패', '#f43f5e');
-          alertMessage = `⚠️ Gemini API 연결 실패 (코드 ${ev.code})\n\nAPI 키가 올바른지 확인하거나 새로운 키로 변경해 주세요.\n사유: ${reason || '인증/네트워크 오류'}`;
-        } else if (ev.code !== 1000) {
-          this.setStatusPill('연결 종료', '#94a3b8');
-        } else {
-          this.setStatusPill('대기 중', '#94a3b8');
-        }
-
-        this.stopStreaming();
-
-        if (alertMessage) {
-          setTimeout(() => alert(alertMessage), 100);
-        }
-      };
-
-      this.ws.onerror = (err) => {
-        this.addDebugLog(`[WebSocket Error] Connection failed. Check API Key/Network.`);
-        this.setStatusPill('통신 오류 (API 키 확인)', '#f43f5e');
-        this.stopStreaming();
-      };
-
+      // 2. 번역 방향별 Gemini 세션 연결 (누르고 말하기는 양방향 2개를 미리 열어둠)
+      this.setStatusPill('통역 서버 연결 중...', 'orange');
+      this.streamStatusLabel.textContent = '마이크 연결됨 🎙️ · 통역 서버 연결 중...';
+      this.ensureSessions();
     } catch (err) {
       this.addDebugLog(`[Start Error] ${err.message}`);
       alert('스트리밍을 시작할 수 없습니다: ' + err.message);
@@ -1745,22 +1817,166 @@ Do not include markdown code block quotes. Output pure JSON only.`;
     }
   }
 
+  // 현재 말하는 사람 기준 번역 대상 언어
+  getActiveTarget() {
+    if (this.speechMode === 'ptt' && this.currentPttSpeaker === 'partner') return this.userLang;
+    return this.partnerLang;
+  }
+
+  get activeSession() {
+    return this.sessions.get(this.getActiveTarget()) || null;
+  }
+
+  // 지금 모드에서 필요한 번역 방향 목록
+  getNeededTargets() {
+    if (this.speechMode === 'ptt') {
+      return [...new Set([this.partnerLang, this.userLang])];
+    }
+    return [this.partnerLang];
+  }
+
+  ensureSessions() {
+    if (!this.isStreaming) return;
+    for (const lang of this.getNeededTargets()) {
+      if (!this.sessions.has(lang) && !this.reconnectTimers.has(lang)) {
+        this.openSession(lang);
+      }
+    }
+  }
+
+  openSession(lang, { replacing = null } = {}) {
+    const session = new LiveSession({
+      targetLang: lang,
+      echo: this.settings.echoTargetLanguage,
+      log: (m) => this.addDebugLog(m),
+      onReady: (s) => this.onSessionReady(s),
+      onMessage: (raw, s) => this.handleServerMessage(raw, s),
+      onClose: (s, ev) => this.onSessionClose(s, ev)
+    });
+    session.replaces = replacing;
+    if (!replacing) this.sessions.set(lang, session);
+
+    this.addDebugLog(`[Session ${lang}] 임시 토큰 발급 및 연결 중...`);
+    session.connect().catch((err) => {
+      if (session.closedByUser) return;
+      this.addDebugLog(`[Session ${lang}] 연결 실패: ${err.message}`);
+      if (err.status === 429) {
+        this.setStatusPill('잠시 후 다시 시도', '#f43f5e');
+      }
+      this.onSessionClose(session, { code: 0, reason: err.message, tokenError: true, status: err.status });
+    });
+    return session;
+  }
+
+  onSessionReady(session) {
+    const lang = session.targetLang;
+
+    // GoAway 교체 세션이 준비되면 이전 세션과 바꿔치기 (끊김 없는 세션 갱신)
+    if (session.replaces) {
+      const old = session.replaces;
+      session.replaces = null;
+      if (!this.isStreaming || this.sessions.get(lang) !== old) {
+        session.close();
+        return;
+      }
+      this.sessions.set(lang, session);
+      setTimeout(() => old.close(), 1500); // 이전 세션의 남은 번역 음성은 마저 받음
+      this.addDebugLog(`[Session ${lang}] 새 세션으로 무중단 교체 완료`);
+      return;
+    }
+
+    if (this.sessions.get(lang) !== session) return;
+    this.reconnectAttempts.set(lang, 0);
+    this.addDebugLog(`[Session ${lang}] 통역 준비 완료`);
+
+    if (session === this.activeSession) {
+      this.setStatusPill('통역 중 (듣는 중)', '#10b981');
+      this.streamStatusLabel.textContent = this.speechMode === 'ptt'
+        ? '버튼을 누르고 있는 동안 말씀하세요 (Space 키 가능)'
+        : '음성을 듣고 실시간 통역 중입니다... (말씀하세요)';
+    }
+  }
+
+  onSessionClose(session, ev = {}) {
+    const lang = session.targetLang;
+    const reason = ev.reason || '';
+    if (!ev.tokenError) this.addDebugLog(`[Session ${lang}] 종료 (코드 ${ev.code}${reason ? ', ' + reason : ''})`);
+
+    // 교체용 세션이 실패한 경우: 기존 세션은 아직 살아 있으므로 아무것도 안 함
+    if (session.replaces) return;
+    if (session.closedByUser || !this.isStreaming) return;
+    if (this.sessions.get(lang) !== session) return;
+
+    this.sessions.delete(lang);
+
+    // 복구 불가능한 오류: 사용량 한도 소진
+    const isQuota = reason.includes('credits') || reason.includes('quota') || reason.includes('RESOURCE_EXHAUSTED');
+    if (isQuota) {
+      this.setStatusPill('사용량 한도 초과', '#f43f5e');
+      this.stopStreaming();
+      setTimeout(() => alert('⚠️ 통역 서비스 사용량 한도에 도달했습니다.\n\n잠시 후 다시 시도해 주세요. 계속되면 관리자에게 문의해 주세요.'), 100);
+      return;
+    }
+
+    // 그 외(네트워크 끊김, 서버 오류, 세션 만료, 준비 시간 초과)는 자동 재연결
+    const attempts = (this.reconnectAttempts.get(lang) || 0) + 1;
+    this.reconnectAttempts.set(lang, attempts);
+
+    if (attempts > MAX_RECONNECT_ATTEMPTS) {
+      this.setStatusPill('통역 연결 실패', '#f43f5e');
+      this.stopStreaming();
+      setTimeout(() => alert('⚠️ 통역 서버에 연결할 수 없습니다.\n\n네트워크 상태를 확인한 뒤 다시 시도해 주세요.'), 100);
+      return;
+    }
+
+    const delay = Math.min(4000, 300 * Math.pow(2, attempts - 1));
+    this.setStatusPill(`재연결 중... (${attempts}/${MAX_RECONNECT_ATTEMPTS})`, 'orange');
+    this.addDebugLog(`[Session ${lang}] ${delay}ms 후 재연결 (${attempts}/${MAX_RECONNECT_ATTEMPTS})`);
+    const timer = setTimeout(() => {
+      this.reconnectTimers.delete(lang);
+      if (this.isStreaming && !this.sessions.has(lang)) this.openSession(lang);
+    }, delay);
+    this.reconnectTimers.set(lang, timer);
+  }
+
+  // 블루투스 연결/해제, 전화 수신 등으로 마이크가 끊겼을 때 자동으로 다시 연결
+  async recoverMicrophone(why) {
+    if (!this.isStreaming || this.isRecoveringMic) return;
+    this.isRecoveringMic = true;
+    this.addDebugLog(`[Mic] 마이크 재연결 시도 (${why})`);
+    try {
+      this.audioStreamer.stopRecording();
+      await new Promise(r => setTimeout(r, 300));
+      if (!this.isStreaming) return;
+      await this.audioStreamer.startRecording({ echoCancellation: this.settings.echoCancellation });
+      this.addDebugLog('[Mic] 마이크 재연결 완료');
+    } catch (err) {
+      this.addDebugLog(`[Mic] 재연결 실패: ${err.message}`);
+      this.setStatusPill('마이크 연결 끊김 (다시 시작해 주세요)', '#f43f5e');
+    } finally {
+      this.isRecoveringMic = false;
+    }
+  }
+
+  closeAllSessions() {
+    this.reconnectTimers.forEach(t => clearTimeout(t));
+    this.reconnectTimers.clear();
+    this.sessions.forEach(s => s.close());
+    this.sessions.clear();
+    this.reconnectAttempts.clear();
+  }
+
   stopStreaming() {
     this.isStreaming = false;
     this.audioStreamer.stopRecording();
-
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      try {
-        this.ws.close();
-      } catch (e) {}
-    }
-    this.ws = null;
+    this.closeAllSessions();
+    this.latencyStartAt = null;
+    this.audioHoldStartedAt = null;
 
     this.updateStatusUI(false);
     this.flushCurrentTurnToHistory();
 
     // Trigger AI Learning analysis immediately on stop
-    console.log('[AutoLearn Trigger] History length:', this.history.length);
     if (this.history.length > 0) {
       this.triggerAutoLearn();
     } else {
@@ -1775,39 +1991,37 @@ Do not include markdown code block quotes. Output pure JSON only.`;
       return;
     }
 
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.chunksSent++;
-      const payload = {
-        realtime_input: {
-          media_chunks: [
-            {
-              mime_type: 'audio/pcm;rate=16000',
-              data: base64Data
-            }
-          ]
-        }
-      };
-      this.ws.send(JSON.stringify(payload));
-      if (this.chunksSent % 5 === 0) {
-        this.updateStatsBar();
-      }
+    const session = this.activeSession;
+    if (!session) return;
+    session.sendAudio(base64Data);
+    this.chunksSent++;
+    if (this.chunksSent % 5 === 0) {
+      this.updateStatsBar();
     }
   }
 
-  handleServerMessage(data) {
-    if (data.setupComplete || data.setup_complete) {
-      this.addDebugLog('[Gemini] Setup Complete! Ready for speech.');
-      this.setStatusPill('통역 준비 완료 (말씀하세요)', '#10b981');
-      return;
-    }
-
+  handleServerMessage(data, session = null) {
+    // 세션 만료 예고(GoAway): 끊기기 전에 새 세션을 미리 열어 무중단 교체
     if (data.goAway || data.go_away) {
-      this.addDebugLog('[Gemini] 10분 세션 교체 신호(GoAway) 수신');
+      this.addDebugLog(`[Session ${session?.targetLang}] 세션 교체 예고(GoAway) 수신 -> 새 세션 준비`);
+      if (session && this.isStreaming && this.sessions.get(session.targetLang) === session) {
+        this.openSession(session.targetLang, { replacing: session });
+      }
       return;
     }
 
     const serverContent = data.serverContent || data.server_content || data.payload?.serverContent;
     if (!serverContent) return;
+
+    // 현재 말하는 방향이 아닌 세션(직전 발화자의 마무리 번역 등)은 음성만 재생하고 자막/턴 처리는 건너뜀
+    if (session && session !== this.activeSession) {
+      const parts = (serverContent.modelTurn || serverContent.model_turn)?.parts || [];
+      for (const part of parts) {
+        const inline = part.inlineData || part.inline_data;
+        if (inline?.data && this.settings.audioOutputEnabled) this.playTranslatedChunk(inline.data);
+      }
+      return;
+    }
 
     if (serverContent.interrupted) {
       this.addDebugLog('[Gemini] 사용자 발화 감지로 AI 음성 출력이 중단됨(interrupted)');
@@ -1836,17 +2050,7 @@ Do not include markdown code block quotes. Output pure JSON only.`;
         this.pendingTurnTimer = null;
       }
 
-      // [자동 감지 모드] 자막 수신 시 발화 중 상태 유지 및 pauseTolerance 타이머 갱신
-      if (this.speechMode === 'handsfree') {
-        this.isHandsfreeSpeaking = true;
-        if (this.handsfreeSilenceTimer) {
-          clearTimeout(this.handsfreeSilenceTimer);
-          this.handsfreeSilenceTimer = null;
-        }
-        this.handsfreeSilenceTimer = setTimeout(() => {
-          this.onHandsfreeSpeechEnded();
-        }, this.pauseTolerance);
-      }
+      // (자막은 실제 발화보다 늦게 도착하므로 발화 감지는 마이크 음량으로만 판단합니다)
 
       refreshPttFallback();
       this.addDebugLog(`[STT 원문] ${inTrans.text}`);
@@ -1884,11 +2088,16 @@ Do not include markdown code block quotes. Output pure JSON only.`;
               this.pendingAudioQueue.push(inlineData.data);
               this.addDebugLog('[오디오 보류] PTT 누름 중');
             } else if (this.speechMode === 'handsfree' && this.smartGuard && this.isHandsfreeSpeaking) {
-              // 자동 감지 모드 + 스마트 긴 문장 보호 ON: 말하는 도중에는 번역 오디오 보류
+              // 자동 감지 모드 + 스마트 긴 문장 보호 ON: 말하는 도중에는 보류하되 최대 3초까지만
+              if (!this.audioHoldStartedAt) this.audioHoldStartedAt = Date.now();
               this.pendingAudioQueue.push(inlineData.data);
-              this.addDebugLog('[오디오 보류] 자동감지 발화 중');
+              if (Date.now() - this.audioHoldStartedAt > SMART_GUARD_MAX_HOLD_MS) {
+                this.addDebugLog('[오디오 보류] 최대 보류 시간 초과 -> 재생');
+                this.playPendingAudioQueue();
+              }
             } else {
-              this.audioStreamer.playChunk(inlineData.data);
+              this.playPendingAudioQueue();
+              this.playTranslatedChunk(inlineData.data);
             }
           }
         }
@@ -2455,6 +2664,9 @@ Do not include markdown code block quotes. Output pure JSON only.`;
 
   addDebugLog(msg) {
     console.log('[Live]', msg);
+    const line = `${new Date().toISOString().slice(11, 23)} ${msg}`;
+    (window.talkLog = window.talkLog || []).push(line);
+    if (window.talkLog.length > 300) window.talkLog.shift();
     const logEl = document.getElementById('debug-log-text');
     if (logEl) {
       logEl.textContent = msg;
