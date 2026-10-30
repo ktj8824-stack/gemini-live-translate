@@ -1,5 +1,4 @@
 import express from 'express';
-import { WebSocketServer, WebSocket } from 'ws';
 import http from 'http';
 import dotenv from 'dotenv';
 import path from 'path';
@@ -12,10 +11,74 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server, path: '/ws/translate' });
 
 const PORT = process.env.PORT || 3000;
+// Gemini API 키는 오직 서버(.env)에만 둡니다. 클라이언트에는 절대 전달하지 않습니다.
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const LIVE_MODEL = 'models/gemini-3.5-live-translate-preview';
+const LEARN_MODEL = process.env.LEARN_MODEL || 'gemini-3.6-flash';
+const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta';
+
+// 허용할 웹 출처 (쉼표 구분). iOS 앱(WKWebView, file://)은 Origin이 "null"로 옵니다.
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
+const ALLOW_FILE_ORIGIN = process.env.ALLOW_FILE_ORIGIN !== 'false';
+
+if (!GEMINI_API_KEY) {
+  console.warn('⚠️  GEMINI_API_KEY가 .env에 설정되지 않았습니다. 통역 토큰 발급이 실패합니다.');
+}
+
+// ---------------------------------------------------------------------------
+// CORS (iOS 앱/다른 도메인에서 /api 호출 허용)
+// ---------------------------------------------------------------------------
+app.use('/api', (req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin) {
+    const allowed =
+      ALLOWED_ORIGINS.includes(origin) ||
+      (origin === 'null' && ALLOW_FILE_ORIGIN);
+    if (allowed) {
+      res.set('Access-Control-Allow-Origin', origin);
+      res.set('Vary', 'Origin');
+      res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.set('Access-Control-Allow-Headers', 'Content-Type');
+    }
+  }
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
+
+// ---------------------------------------------------------------------------
+// 간단한 IP별 요청 제한 (토큰 남발로 인한 요금 폭탄 방지)
+// ---------------------------------------------------------------------------
+function rateLimit({ windowMs, max }) {
+  const hits = new Map();
+  setInterval(() => {
+    const now = Date.now();
+    for (const [ip, entry] of hits) {
+      if (now - entry.start > windowMs) hits.delete(ip);
+    }
+  }, windowMs).unref();
+
+  return (req, res, next) => {
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
+    const now = Date.now();
+    let entry = hits.get(ip);
+    if (!entry || now - entry.start > windowMs) {
+      entry = { start: now, count: 0 };
+      hits.set(ip, entry);
+    }
+    entry.count++;
+    if (entry.count > max) {
+      return res.status(429).json({ error: '요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.' });
+    }
+    next();
+  };
+}
+
+if (process.env.TRUST_PROXY) app.set('trust proxy', process.env.TRUST_PROXY);
 
 app.use(express.static(path.join(__dirname, 'public'), {
   etag: false,
@@ -26,28 +89,71 @@ app.use(express.static(path.join(__dirname, 'public'), {
     res.set('Expires', '0');
   }
 }));
-app.use(express.json());
+app.use(express.json({ limit: '200kb' }));
 
 app.get('/api/status', (req, res) => {
   res.json({
     status: 'ok',
     hasKey: Boolean(GEMINI_API_KEY),
-    model: 'gemini-3.5-live-translate-preview'
+    model: LIVE_MODEL
   });
 });
 
-// Autonomous AI Learning Analyzer (Background Knowledge & Glossary Extractor)
-app.post('/api/learn-auto', async (req, res) => {
-  try {
-    const { history, currentRules, apiKey } = req.body;
-    const key = apiKey || GEMINI_API_KEY;
+// ---------------------------------------------------------------------------
+// 실시간 통역용 임시 토큰 발급 (Ephemeral Token)
+// - 1회용, 새 세션은 1분 안에 시작해야 하며, 세션은 최대 30분 유효
+// - 모델은 서버에서 고정(fieldMask: model) → 토큰을 탈취해도 다른 모델 사용 불가
+// ---------------------------------------------------------------------------
+app.post('/api/live-token', rateLimit({ windowMs: 60_000, max: 20 }), async (req, res) => {
+  if (!GEMINI_API_KEY) {
+    return res.status(500).json({ error: '서버에 Gemini API 키가 설정되지 않았습니다.' });
+  }
 
-    if (!key) {
-      return res.status(400).json({ error: 'API key required' });
+  try {
+    const now = Date.now();
+    const body = {
+      expireTime: new Date(now + 30 * 60_000).toISOString(),
+      newSessionExpireTime: new Date(now + 60_000).toISOString(),
+      bidiGenerateContentSetup: { model: LIVE_MODEL },
+      fieldMask: 'model'
+    };
+
+    const geminiRes = await fetch(`${GEMINI_BASE}/auth_tokens`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': GEMINI_API_KEY
+      },
+      body: JSON.stringify(body)
+    });
+
+    const data = await geminiRes.json().catch(() => ({}));
+    if (!geminiRes.ok || !data.name) {
+      console.error('[LiveToken] 발급 실패:', geminiRes.status, JSON.stringify(data));
+      return res.status(502).json({ error: '통역 토큰 발급에 실패했습니다.', status: geminiRes.status });
     }
 
-    if (!history || history.length === 0) {
-      return res.json({ newRules: [], summary: '' });
+    res.json({ token: data.name, model: LIVE_MODEL, expireTime: body.expireTime });
+  } catch (err) {
+    console.error('[LiveToken] Error:', err);
+    res.status(500).json({ error: '통역 토큰 발급 중 오류가 발생했습니다.' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// AI 자동 학습 (대화에서 용어/맥락 추출) - 서버 키로만 호출
+// ---------------------------------------------------------------------------
+app.post('/api/learn-auto', rateLimit({ windowMs: 60_000, max: 10 }), async (req, res) => {
+  try {
+    if (!GEMINI_API_KEY) {
+      return res.status(500).json({ error: '서버에 Gemini API 키가 설정되지 않았습니다.' });
+    }
+
+    const history = Array.isArray(req.body?.history) ? req.body.history.slice(-10) : [];
+    const currentRules = Array.isArray(req.body?.currentRules) ? req.body.currentRules.slice(0, 100) : [];
+
+    if (history.length === 0) {
+      return res.json({ contextSummary: '', extractedRules: [] });
     }
 
     const prompt = `You are an Autonomous AI Linguist & Memory Engine.
@@ -55,7 +161,7 @@ Analyze the following bilingual conversation transcript between two users:
 ${JSON.stringify(history, null, 2)}
 
 Already known memory rules:
-${JSON.stringify(currentRules || [])}
+${JSON.stringify(currentRules)}
 
 Tasks:
 1. Identify any key proper nouns, brand names, technical/specialized terms, jargon, slang, or recurring phrases that need consistent, accurate future translation.
@@ -69,159 +175,37 @@ Tasks:
 }
 Do not include markdown code block quotes. Output pure JSON only.`;
 
-    const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`, {
+    const geminiRes = await fetch(`${GEMINI_BASE}/models/${LEARN_MODEL}:generateContent`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': GEMINI_API_KEY
+      },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: { responseMimeType: 'application/json' }
       })
     });
 
-    const data = await geminiRes.json();
-    console.log('[AutoLearn Response]', JSON.stringify(data));
+    const data = await geminiRes.json().catch(() => ({}));
+    if (!geminiRes.ok) {
+      console.error('[AutoLearn] Gemini 오류:', geminiRes.status, JSON.stringify(data));
+      return res.status(502).json({ error: 'AI 학습 요청이 실패했습니다.' });
+    }
+
     const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
     let parsed = {};
     try {
       parsed = JSON.parse(rawText);
     } catch (e) {
-      console.error('[AutoLearn] JSON parse error:', e, rawText);
+      console.error('[AutoLearn] JSON parse error:', e.message);
     }
 
     res.json(parsed);
   } catch (err) {
     console.error('[AutoLearn] Error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'AI 학습 중 오류가 발생했습니다.' });
   }
-});
-
-const GEMINI_WS_URL = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${GEMINI_API_KEY}`;
-
-wss.on('connection', (clientWs, req) => {
-  console.log(`[Client] Connected`);
-  let geminiWs = null;
-  let isGeminiReady = false;
-  let chunkCount = 0;
-
-  const sendToClient = (data) => {
-    if (clientWs.readyState === WebSocket.OPEN) {
-      clientWs.send(JSON.stringify(data));
-    }
-  };
-
-  const connectToGemini = (config) => {
-    if (geminiWs) {
-      try { geminiWs.close(); } catch (e) {}
-    }
-
-    const apiKey = config?.apiKey || GEMINI_API_KEY;
-    const targetLang = config?.targetLanguageCode || 'en';
-    const echoTarget = config?.echoTargetLanguage ?? true;
-
-    if (!apiKey) {
-      console.error('[Gemini] No API key available');
-      sendToClient({ type: 'error', error: 'API 키가 필요합니다.' });
-      return;
-    }
-
-    const geminiUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${apiKey}`;
-
-    console.log(`[Gemini] Connecting... TargetLang: ${targetLang}, Echo: ${echoTarget}`);
-
-    try {
-      geminiWs = new WebSocket(geminiUrl);
-
-      geminiWs.on('open', () => {
-        console.log('[Gemini] Connected! Sending setup...');
-
-        const setupMessage = {
-          setup: {
-            model: 'models/gemini-3.5-live-translate-preview',
-            generation_config: {
-              response_modalities: ['AUDIO', 'TEXT'],
-              translation_config: {
-                target_language_code: targetLang,
-                echo_target_language: echoTarget
-              }
-            }
-          }
-        };
-
-        geminiWs.send(JSON.stringify(setupMessage));
-      });
-
-      geminiWs.on('message', (data) => {
-        try {
-          const raw = JSON.parse(data.toString());
-
-          if (raw.setupComplete || raw.setup_complete) {
-            isGeminiReady = true;
-            console.log('✅ [Gemini] Setup Complete!');
-            sendToClient({ type: 'status', status: 'ready' });
-            return;
-          }
-
-          // Forward all Gemini events directly
-          sendToClient(raw);
-        } catch (err) {
-          console.error('[Gemini] Parse error:', err);
-        }
-      });
-
-      geminiWs.on('close', (code, reason) => {
-        console.log(`[Gemini] Closed (${code}): ${reason.toString()}`);
-        isGeminiReady = false;
-        sendToClient({ type: 'status', status: 'closed', code });
-      });
-
-      geminiWs.on('error', (err) => {
-        console.error('[Gemini] Error:', err.message);
-        sendToClient({ type: 'error', error: err.message });
-      });
-    } catch (err) {
-      console.error('[Gemini] Setup error:', err);
-    }
-  };
-
-  clientWs.on('message', (message) => {
-    try {
-      const parsed = JSON.parse(message.toString());
-
-      if (parsed.type === 'start') {
-        connectToGemini(parsed.config);
-      } else if (parsed.type === 'audio_chunk') {
-        chunkCount++;
-        if (geminiWs && geminiWs.readyState === WebSocket.OPEN) {
-          const payload = {
-            realtime_input: {
-              media_chunks: [
-                {
-                  mime_type: 'audio/pcm;rate=16000',
-                  data: parsed.data
-                }
-              ]
-            }
-          };
-          geminiWs.send(JSON.stringify(payload));
-        }
-      } else if (parsed.type === 'update_config') {
-        connectToGemini(parsed.config);
-      } else if (parsed.type === 'stop') {
-        if (geminiWs && geminiWs.readyState === WebSocket.OPEN) {
-          geminiWs.close();
-        }
-      }
-    } catch (err) {
-      console.error('[Client] Message error:', err);
-    }
-  });
-
-  clientWs.on('close', () => {
-    console.log('[Client] Disconnected');
-    if (geminiWs && geminiWs.readyState === WebSocket.OPEN) {
-      geminiWs.close();
-    }
-  });
 });
 
 server.listen(PORT, '0.0.0.0', () => {
